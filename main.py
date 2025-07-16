@@ -12,13 +12,18 @@ VAR_RE = re.compile(r"\{[^}]+\}")
 # ==============================================================
 #  Extraction helpers
 # ==============================================================
+
 def normalize_tag(tag: str) -> str:
     """Bỏ tham số trong dấu ngoặc: IfGender_ACTOR(him,her,it) -> IfGender_ACTOR."""
     return tag.split("(", 1)[0].strip()
 
 
 def extract_tags(text: str):
-    """\n    GIỮ LẠI HÀM CŨ cho tương thích (trả về list(tuple(name,param_count_filled))).\n    *param_count_filled* = số tham số KHÔNG RỖNG.\n    (Hàm mới parse_tags_detail ở bên dưới cung cấp thêm thông tin slot/fill.)\n    """
+    """
+    GIỮ LẠI HÀM CŨ cho tương thích (trả về list(tuple(name,param_count_filled))).
+    *param_count_filled* = số tham số KHÔNG RỖNG.
+    (Hàm mới parse_tags_detail ở bên dưới cung cấp thêm thông tin slot/fill.)
+    """
     tags = TAG_RE.findall(text)
     result = []
     for tag in tags:
@@ -49,9 +54,7 @@ def parse_tags_detail(text: str):
         filled_count = 0
         if "(" in raw and ")" in raw:
             inner = raw[raw.find("(") + 1 : raw.rfind(")")]
-            # Nếu chuỗi trống -> 0 slot? Thực tế engine thường kỳ vọng số vị trí rõ ràng qua dấu phẩy.
-            # Ta xử lý như sau: nếu có ít nhất 1 dấu phẩy HOẶC inner không rỗng -> coi là 1+slot.
-            # Tốt nhất là split(',') rồi đếm.
+            # Nếu chuỗi trống -> 0 slot. Nếu có nội dung ta split(',') để đếm slot & filled.
             parts = inner.split(",") if inner != "" else []
             slot_count = len(parts)
             filled_count = sum(1 for p in parts if p.strip())
@@ -67,7 +70,11 @@ def extract_vars(text: str):
 # ==============================================================
 
 def split_blocks(lines):
-    """\n    Return {key: [(global_idx, line_text), ...]}.\n    Keys là dòng bắt đầu bằng 'Txt_' (strip).\n    Các dòng nội dung theo sau đến key kế tiếp.\n    """
+    """
+    Return {key: [(global_idx, line_text), ...]}.
+    Keys là dòng bắt đầu bằng 'Txt_' (strip).
+    Các dòng nội dung theo sau đến key kế tiếp.
+    """
     blocks = {}
     current_key = None
     for idx, raw in enumerate(lines):
@@ -112,6 +119,32 @@ def _group_taginfo(detail_list):
     for name, slot, filled in detail_list:
         grouped[name].append((slot, filled))
     return grouped
+
+
+def _compare_param_fill(name, o_slot, o_filled, t_slot, t_filled):
+    """So sánh tham số 1 occurrence tag giữa GỐC & DỊCH.
+
+    Quy tắc chính (theo yêu cầu):
+    - Chỉ cần bản dịch *khớp với gốc* là OK.
+    - Nếu số slot khác: báo Thiếu/Thừa tham số.
+    - Nếu slot giống:
+        * t_filled == o_filled -> OK (kể cả cả hai < slot_count).
+        * t_filled <  o_filled -> Thiếu nội dung tham số.
+        * t_filled >  o_filled -> Dư nội dung tham số (cảnh báo).
+    Trả về thông điệp lỗi (str) hoặc None nếu OK.
+    """
+    if o_slot != t_slot:
+        if t_slot < o_slot:
+            return f"Tag {name}: Thiếu tham số (gốc {o_slot}, dịch {t_slot})."
+        else:
+            return f"Tag {name}: Thừa tham số (gốc {o_slot}, dịch {t_slot})."
+    # slot giống nhau
+    if t_filled != o_filled:
+        if t_filled < o_filled:
+            return f"Tag {name}: Thiếu nội dung tham số (gốc {o_filled}, dịch {t_filled})."
+        else:
+            return f"Tag {name}: Dư nội dung tham số (gốc {o_filled}, dịch {t_filled})."
+    return None
 
 
 def compare_block(key, o_block, t_block, errors):
@@ -169,9 +202,7 @@ def compare_block(key, o_block, t_block, errors):
         # Tag / var compare  (ĐÃ SỬA LOGIC so với bản cũ)
         # ------------------------------------------------------
         # Mục tiêu: tránh tình huống "Thiếu tag X" + "Dư tag X" (vì chỉ sai tham số).
-        # Cách làm: so sánh theo *tên tag*; sau đó kiểm tra số lần xuất hiện và số tham số.
-        # Nếu khác số tham số -> báo "Thiếu/Thừa tham số" thay vì missing/extra tag.
-        # Nếu dịch viết (,,) -> slot=3 nhưng filled=0 -> báo "Tham số trống".
+        # So sánh theo *tên tag*; sau đó kiểm tra số lần xuất hiện và số tham số.
         # ------------------------------------------------------
 
         o_vars = Counter(extract_vars(o_stripped))
@@ -198,7 +229,7 @@ def compare_block(key, o_block, t_block, errors):
         for name in t_group.keys() - o_group.keys():
             extra_tag_names.append(name)
 
-        # tên xuất hiện ở cả hai -> kiểm tra từng occurrence (tạm thời match theo thứ tự)
+        # tên xuất hiện ở cả hai -> kiểm tra từng occurrence (match theo index)
         for name in o_group.keys() & t_group.keys():
             o_list = o_group[name]
             t_list = t_group[name]
@@ -207,27 +238,13 @@ def compare_block(key, o_block, t_block, errors):
                     param_msgs.append(f"Tag {name}: Thiếu {len(o_list) - len(t_list)} lần xuất hiện.")
                 else:
                     param_msgs.append(f"Tag {name}: Dư {len(t_list) - len(o_list)} lần xuất hiện.")
-            # so sánh theo cặp (theo index an toàn nhất; nếu lệch đã báo trên)
+            # so sánh theo cặp (theo index; nếu lệch đã báo trên)
             for i in range(min(len(o_list), len(t_list))):
                 o_slot, o_filled = o_list[i]
                 t_slot, t_filled = t_list[i]
-                if o_slot != t_slot:
-                    if t_slot < o_slot:
-                        param_msgs.append(
-                            f"Tag {name}: Thiếu tham số (gốc {o_slot}, dịch {t_slot}).")
-                    else:
-                        param_msgs.append(
-                            f"Tag {name}: Thừa tham số (gốc {o_slot}, dịch {t_slot}).")
-                else:
-                    # slot giống nhau -> kiểm tra filled
-                    if o_slot > 0 and t_filled < o_slot:
-                        # Nếu tất cả trống -> báo rõ hơn
-                        if t_filled == 0:
-                            param_msgs.append(
-                                f"Tag {name}: {o_slot} tham số nhưng bản dịch để trống.")
-                        else:
-                            param_msgs.append(
-                                f"Tag {name}: {o_slot} tham số, nhưng chỉ {t_filled} tham số có nội dung.")
+                msg = _compare_param_fill(name, o_slot, o_filled, t_slot, t_filled)
+                if msg:
+                    param_msgs.append(msg)
 
         # Gom thông điệp
         if miss_tag_names or extra_tag_names or miss_vars or extra_vars or param_msgs:
@@ -562,7 +579,7 @@ def on_error_keypress(event):
 #  UI setup
 # ==============================================================
 root = tk.Tk()
-root.title("So sánh Tag & Biến từng dòng - Enhanced (ParamFix)")
+root.title("So sánh Tag & Biến từng dòng - Enhanced (ParamMatch)")
 
 # Columns expand
 root.grid_columnconfigure(0, weight=1)
@@ -582,7 +599,6 @@ find_dialog_orig = setup_text_widget(txt_original)
 find_dialog_trans = setup_text_widget(txt_translated)
 
 # Buttons frame
-tn_frame = tk.Frame(root)
 btn_frame = tk.Frame(root)
 btn_frame.grid(row=2, column=0, columnspan=2, pady=10)
 
