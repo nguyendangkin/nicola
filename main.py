@@ -1,6 +1,9 @@
 import tkinter as tk
 from tkinter import scrolledtext, messagebox, simpledialog, ttk
+from tkinterdnd2 import DND_FILES, TkinterDnD
 import re
+import sys
+import os
 from collections import Counter, defaultdict
 
 # ==============================================================
@@ -64,6 +67,33 @@ def parse_tags_detail(text: str):
 
 def extract_vars(text: str):
     return VAR_RE.findall(text)
+
+# ==============================================================
+#  File handling
+# ==============================================================
+
+def load_file_content(file_path):
+    """Load content from a text file with proper encoding detection"""
+    try:
+        # Try UTF-8 first
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except UnicodeDecodeError:
+        try:
+            # Try with system default encoding
+            with open(file_path, 'r', encoding='cp1252') as f:
+                return f.read()
+        except UnicodeDecodeError:
+            try:
+                # Try with latin-1 as fallback
+                with open(file_path, 'r', encoding='latin-1') as f:
+                    return f.read()
+            except Exception as e:
+                messagebox.showerror("Lỗi đọc file", f"Không thể đọc file {file_path}:\n{str(e)}")
+                return None
+    except Exception as e:
+        messagebox.showerror("Lỗi đọc file", f"Không thể đọc file {file_path}:\n{str(e)}")
+        return None
 
 # ==============================================================
 #  Block splitting
@@ -352,6 +382,34 @@ class LineNumberWidget(tk.Text):
         self.yview_moveto(self.text_widget.yview()[0])
         
         self.config(state='disabled')
+
+# ==============================================================
+#  Drag and Drop functionality
+# ==============================================================
+
+def on_drop_original(event):
+    """Handle file drop on original text widget"""
+    files = root.tk.splitlist(event.data)
+    if files:
+        file_path = files[0]
+        content = load_file_content(file_path)
+        if content is not None:
+            txt_original.delete("1.0", tk.END)
+            txt_original.insert("1.0", content)
+            line_numbers_orig.update_line_numbers()
+            status_label.config(text=f"Đã tải file gốc: {os.path.basename(file_path)}")
+
+def on_drop_translated(event):
+    """Handle file drop on translated text widget"""
+    files = root.tk.splitlist(event.data)
+    if files:
+        file_path = files[0]
+        content = load_file_content(file_path)
+        if content is not None:
+            txt_translated.delete("1.0", tk.END)
+            txt_translated.insert("1.0", content)
+            line_numbers_trans.update_line_numbers()
+            status_label.config(text=f"Đã tải file dịch: {os.path.basename(file_path)}")
 
 # ==============================================================
 #  Highlight helpers - IMPROVED HIGHLIGHTING
@@ -686,18 +744,49 @@ def on_error_keypress(event):
         copy_error_log()
 
 # ==============================================================
-#  UI setup - IMPROVED WITH LINE NUMBERS AND HORIZONTAL SCROLL
+#  Command line argument handling
 # ==============================================================
-root = tk.Tk()
-root.title("So sánh Tag & Biến từng dòng - Enhanced với Số dòng")
+
+def handle_command_line_args():
+    """Handle command line arguments for drag and drop to exe"""
+    if len(sys.argv) > 1:
+        file_path = sys.argv[1]
+        if os.path.isfile(file_path):
+            content = load_file_content(file_path)
+            if content is not None:
+                txt_original.delete("1.0", tk.END)
+                txt_original.insert("1.0", content)
+                line_numbers_orig.update_line_numbers()
+                status_label.config(text=f"Đã tải file từ dòng lệnh: {os.path.basename(file_path)}")
+
+# ==============================================================
+#  UI setup - IMPROVED WITH LINE NUMBERS, HORIZONTAL SCROLL AND DRAG DROP
+# ==============================================================
+
+# Try to import tkinterdnd2, fallback if not available
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    DND_AVAILABLE = True
+except ImportError:
+    DND_AVAILABLE = False
+    print("Warning: tkinterdnd2 not available. Drag and drop functionality will be disabled.")
+    print("To enable drag and drop, install tkinterdnd2: pip install tkinterdnd2")
+
+# Create root window with or without DnD support
+if DND_AVAILABLE:
+    root = TkinterDnD.Tk()
+else:
+    root = tk.Tk()
+
+root.title("So sánh Tag & Biến từng dòng - Enhanced với Kéo thả File")
 
 # Columns expand
 root.grid_columnconfigure(0, weight=1)
 root.grid_columnconfigure(1, weight=1)
 root.grid_rowconfigure(1, weight=1)
 
-tk.Label(root, text="Bản gốc:").grid(row=0, column=0, padx=10, pady=5, sticky="w")
-tk.Label(root, text="Bản dịch:").grid(row=0, column=1, padx=10, pady=5, sticky="w")
+tk.Label(root, text="Bản gốc (Kéo thả file vào đây):").grid(row=0, column=0, padx=10, pady=5, sticky="w")
+tk.Label(root, text="Bản dịch (Kéo thả file vào đây):").grid(row=0, column=1, padx=10, pady=5, sticky="w")
 
 # Create frames for text widgets with line numbers
 orig_frame = tk.Frame(root)
@@ -741,6 +830,14 @@ txt_original.config(yscrollcommand=v_scroll_orig.set)
 v_scroll_trans = tk.Scrollbar(trans_frame, orient=tk.VERTICAL, command=txt_translated.yview)
 v_scroll_trans.grid(row=0, column=2, sticky="ns")
 txt_translated.config(yscrollcommand=v_scroll_trans.set)
+
+# Setup drag and drop if available
+if DND_AVAILABLE:
+    txt_original.drop_target_register(DND_FILES)
+    txt_original.dnd_bind('<<Drop>>', on_drop_original)
+    
+    txt_translated.drop_target_register(DND_FILES)
+    txt_translated.dnd_bind('<<Drop>>', on_drop_translated)
 
 # Setup text widgets with enhanced features
 find_dialog_orig = setup_text_widget(txt_original)
@@ -787,11 +884,16 @@ status_frame = tk.Frame(root)
 status_frame.grid(row=4, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
 status_label = tk.Label(
     status_frame,
-    text="Sẵn sàng. Phím tắt: Ctrl+Z (Undo), Ctrl+Y (Redo), Ctrl+H (Find/Replace) - Có số dòng và scroll ngang",
+    text="Sẵn sàng. Phím tắt: Ctrl+Z (Undo), Ctrl+Y (Redo), Ctrl+H (Find/Replace) - Hỗ trợ kéo thả file",
     anchor="w",
     fg="gray",
 )
 status_label.pack(fill="x")
 
-root.mainloop()
+# Handle command line arguments (for drag and drop to exe)
+handle_command_line_args()
+
+# Start the application
+if __name__ == "__main__":
+    root.mainloop()
 
