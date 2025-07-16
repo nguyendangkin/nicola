@@ -1,401 +1,543 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
-import difflib
-import os
+from tkinter import scrolledtext, messagebox, simpledialog
+import re
+from collections import Counter
 
-class FileComparator:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("File Comparison Tool - Kiểm tra sự khác biệt giữa 2 file")
-        self.root.geometry("1200x800")
+# --- Regex ---
+TAG_RE = re.compile(r"<([^>]+)>")
+VAR_RE = re.compile(r"\{[^}]+\}")
+
+# ----------------------------
+# Extraction helpers
+# ----------------------------
+def normalize_tag(tag: str) -> str:
+    """Bỏ tham số trong dấu ngoặc: IfGender_ACTOR(him,her,it) -> IfGender_ACTOR."""
+    return tag.split("(", 1)[0].strip()
+
+def extract_tags(text: str):
+    tags = TAG_RE.findall(text)
+    return [normalize_tag(tag) for tag in tags]
+
+def extract_vars(text: str):
+    return VAR_RE.findall(text)
+
+# ----------------------------
+# Block splitting
+# ----------------------------
+def split_blocks(lines):
+    """
+    Return {key: [(global_idx, line_text), ...]}.
+    Keys là dòng bắt đầu bằng 'Txt_' (strip).
+    Các dòng nội dung theo sau đến key kế tiếp.
+    """
+    blocks = {}
+    current_key = None
+    for idx, raw in enumerate(lines):
+        line = raw.rstrip("\n")
+        stripped = line.strip()
+        if stripped.startswith("Txt_"):
+            current_key = stripped
+            blocks[current_key] = []
+        else:
+            if current_key is not None:
+                blocks[current_key].append((idx, line))
+    return blocks
+
+# ----------------------------
+# Error structure
+# ----------------------------
+# Mỗi lỗi mình lưu dict:
+# {
+#   'msg': str hiển thị,
+#   'key': str,
+#   'block_line': int (1-based trong block) or None,
+#   'orig_line': int (0-based global trong text widget),
+#   'trans_line': int (0-based) or None nếu thiếu,
+# }
+
+def _add_error(result_list, msg, key, block_line, orig_line, trans_line):
+    result_list.append({
+        "msg": msg,
+        "key": key,
+        "block_line": block_line,
+        "orig_line": orig_line,
+        "trans_line": trans_line,
+    })
+
+# ----------------------------
+# Compare routines
+# ----------------------------
+def compare_block(key, o_block, t_block, errors):
+    """
+    Compare two blocks (list of tuples (global_idx, line_text)).
+    Append structured errors to `errors`.
+    """
+    len_o = len(o_block)
+    len_t = len(t_block)
+
+    if len_o != len_t:
+        if len_o > len_t:
+            _add_error(
+                errors,
+                f"[{key}] Thiếu {len_o - len_t} dòng trong bản dịch (gốc: {len_o}, dịch: {len_t}).",
+                key, None, None, None
+            )
+        else:
+            _add_error(
+                errors,
+                f"[{key}] Dư {len_t - len_o} dòng trong bản dịch (gốc: {len_o}, dịch: {len_t}).",
+                key, None, None, None
+            )
+
+    max_len = max(len_o, len_t)
+    for idx in range(max_len):
+        block_line_num = idx + 1
+        if idx < len_o:
+            o_global_idx, o_text = o_block[idx]
+            o_stripped = o_text.strip()
+        else:
+            # gốc hết; dịch dư -> đã cảnh báo ở trên; bỏ qua chi tiết.
+            continue
+
+        if idx < len_t:
+            t_global_idx, t_text = t_block[idx]
+            t_stripped = t_text.strip()
+        else:
+            # Thiếu dòng dịch
+            snippet = o_stripped[:60]
+            _add_error(
+                errors,
+                f"[{key}, dòng {block_line_num}] Thiếu dòng dịch. Gốc: {snippet}",
+                key, block_line_num, o_global_idx, None
+            )
+            continue
+
+        # gốc có nội dung mà dịch trống
+        if o_stripped and not t_stripped:
+            _add_error(
+                errors,
+                f"[{key}, dòng {block_line_num}] Dòng dịch trống nhưng gốc có nội dung.",
+                key, block_line_num, o_global_idx, t_global_idx
+            )
+            continue
+
+        # Tag / var compare
+        o_tags = Counter(extract_tags(o_stripped))
+        t_tags = Counter(extract_tags(t_stripped))
+        o_vars = Counter(extract_vars(o_stripped))
+        t_vars = Counter(extract_vars(t_stripped))
+
+        miss_tags = list((o_tags - t_tags).elements())
+        miss_vars = list((o_vars - t_vars).elements())
+        extra_tags = list((t_tags - o_tags).elements())
+        extra_vars = list((t_vars - o_vars).elements())
+
+        if miss_tags or miss_vars or extra_tags or extra_vars:
+            parts = [f"[{key}, dòng {block_line_num}]"]
+            if miss_tags:
+                parts.append("Thiếu tag: " + ", ".join(miss_tags))
+            if miss_vars:
+                parts.append("Thiếu biến: " + ", ".join(miss_vars))
+            if extra_tags:
+                parts.append("Dư tag: " + ", ".join(extra_tags))
+            if extra_vars:
+                parts.append("Dư biến: " + ", ".join(extra_vars))
+            _add_error(
+                errors,
+                "  ".join(parts),
+                key, block_line_num, o_global_idx, t_global_idx
+            )
+
+def compare_plain(o_lines, t_lines, errors):
+    """No Txt_ keys found -> treat whole text as one block."""
+    o_block = list(enumerate(o_lines))
+    t_block = list(enumerate(t_lines))
+    compare_block("TOÀN VĂN", o_block, t_block, errors)
+
+# ----------------------------
+# Highlight helpers
+# ----------------------------
+ERROR_TAG_PREFIX = "ERR_"
+ERROR_TAG_TRANS_PREFIX = "ERRT_"
+
+def clear_highlights():
+    # remove all tags we've added
+    for tag in txt_original.tag_names():
+        if tag.startswith(ERROR_TAG_PREFIX):
+            txt_original.tag_delete(tag)
+    for tag in txt_translated.tag_names():
+        if tag.startswith(ERROR_TAG_TRANS_PREFIX):
+            txt_translated.tag_delete(tag)
+
+def highlight_line(widget, tag, line_index, bgcolor):
+    """
+    Highlight 0-based line_index in given Text widget.
+    """
+    # widget lines start at 1.0
+    start = f"{line_index + 1}.0"
+    end = f"{line_index + 1}.0 lineend"
+    widget.tag_add(tag, start, end)
+    widget.tag_config(tag, background=bgcolor)
+
+def jump_to_line(widget, line_index):
+    widget.see(f"{line_index + 1}.0")
+    # also put insert cursor there (optional)
+    widget.mark_set("insert", f"{line_index + 1}.0")
+    widget.focus_set()
+
+# We'll keep a list of error data after each check so click handlers can use it.
+error_data = []
+
+# ----------------------------
+# Find & Replace functionality
+# ----------------------------
+class FindReplaceDialog:
+    def __init__(self, parent, text_widget):
+        self.parent = parent
+        self.text_widget = text_widget
+        self.dialog = None
+        self.find_text = ""
+        self.replace_text = ""
+        self.last_pos = "1.0"
         
-        # Variables
-        self.file1_path = tk.StringVar()
-        self.file2_path = tk.StringVar()
-        self.file1_content = ""
-        self.file2_content = ""
+    def show(self):
+        if self.dialog:
+            self.dialog.lift()
+            return
+            
+        self.dialog = tk.Toplevel(self.parent)
+        self.dialog.title("Tìm & Thay thế")
+        self.dialog.geometry("400x200")
+        self.dialog.resizable(False, False)
         
-        self.setup_ui()
+        # Find entry
+        tk.Label(self.dialog, text="Tìm:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        self.find_entry = tk.Entry(self.dialog, width=30)
+        self.find_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        self.find_entry.insert(0, self.find_text)
         
-    def setup_ui(self):
-        # Main frame
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Input selection frame
-        input_frame = ttk.LabelFrame(main_frame, text="Nhập nội dung để so sánh", padding="5")
-        input_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        
-        # Input method selection
-        method_frame = ttk.Frame(input_frame)
-        method_frame.grid(row=0, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
-        
-        self.input_method = tk.StringVar(value="text")
-        ttk.Radiobutton(method_frame, text="Nhập text trực tiếp", variable=self.input_method, 
-                       value="text", command=self.toggle_input_method).pack(side=tk.LEFT, padx=(0, 20))
-        ttk.Radiobutton(method_frame, text="Chọn từ file", variable=self.input_method, 
-                       value="file", command=self.toggle_input_method).pack(side=tk.LEFT)
-        
-        # File selection (initially hidden)
-        self.file_frame = ttk.Frame(input_frame)
-        self.file_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
-        
-        ttk.Label(self.file_frame, text="File gốc (Original):").grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
-        ttk.Entry(self.file_frame, textvariable=self.file1_path, width=60).grid(row=0, column=1, padx=(5, 5), pady=(0, 5))
-        ttk.Button(self.file_frame, text="Chọn file", command=self.select_file1).grid(row=0, column=2, pady=(0, 5))
-        
-        ttk.Label(self.file_frame, text="File đã dịch (Translated):").grid(row=1, column=0, sticky=tk.W, pady=(0, 5))
-        ttk.Entry(self.file_frame, textvariable=self.file2_path, width=60).grid(row=1, column=1, padx=(5, 5), pady=(0, 5))
-        ttk.Button(self.file_frame, text="Chọn file", command=self.select_file2).grid(row=1, column=2, pady=(0, 5))
-        
-        # Text input areas
-        self.text_frame = ttk.Frame(input_frame)
-        self.text_frame.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
-        
-        # Left text input
-        left_input_frame = ttk.LabelFrame(self.text_frame, text="Nội dung gốc (Original)", padding="5")
-        left_input_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5))
-        
-        self.input_text1 = scrolledtext.ScrolledText(left_input_frame, wrap=tk.WORD, width=50, height=10)
-        self.input_text1.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Right text input
-        right_input_frame = ttk.LabelFrame(self.text_frame, text="Nội dung đã dịch (Translated)", padding="5")
-        right_input_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(5, 0))
-        
-        self.input_text2 = scrolledtext.ScrolledText(right_input_frame, wrap=tk.WORD, width=50, height=10)
-        self.input_text2.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Configure text frame grid
-        self.text_frame.columnconfigure(0, weight=1)
-        self.text_frame.columnconfigure(1, weight=1)
-        self.text_frame.rowconfigure(0, weight=1)
-        left_input_frame.columnconfigure(0, weight=1)
-        left_input_frame.rowconfigure(0, weight=1)
-        right_input_frame.columnconfigure(0, weight=1)
-        right_input_frame.rowconfigure(0, weight=1)
-        
-        # Configure input frame grid
-        input_frame.columnconfigure(0, weight=1)
-        input_frame.rowconfigure(2, weight=1)
-        
-        # Initially show text input
-        self.toggle_input_method()
+        # Replace entry
+        tk.Label(self.dialog, text="Thay thế:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        self.replace_entry = tk.Entry(self.dialog, width=30)
+        self.replace_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        self.replace_entry.insert(0, self.replace_text)
         
         # Buttons frame
-        button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=1, column=0, columnspan=2, pady=(0, 10))
+        btn_frame = tk.Frame(self.dialog)
+        btn_frame.grid(row=2, column=0, columnspan=2, pady=10)
         
-        ttk.Button(button_frame, text="So sánh", command=self.compare_content).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(button_frame, text="Xóa tất cả", command=self.clear_all).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(button_frame, text="Xóa kết quả", command=self.clear_results).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(button_frame, text="Lưu kết quả", command=self.save_results).pack(side=tk.LEFT)
+        tk.Button(btn_frame, text="Tìm tiếp", command=self.find_next).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Thay thế", command=self.replace_current).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Thay thế tất cả", command=self.replace_all).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Đóng", command=self.close).pack(side=tk.LEFT, padx=5)
         
-        # Results frame
-        results_frame = ttk.LabelFrame(main_frame, text="Kết quả so sánh", padding="5")
-        results_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        # Make dialog modal
+        self.dialog.transient(self.parent)
+        self.dialog.grab_set()
+        self.find_entry.focus_set()
         
-        # Summary frame
-        summary_frame = ttk.Frame(results_frame)
-        summary_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        # Bind events
+        self.find_entry.bind('<Return>', lambda e: self.find_next())
+        self.replace_entry.bind('<Return>', lambda e: self.replace_current())
+        self.dialog.protocol("WM_DELETE_WINDOW", self.close)
         
-        self.summary_label = ttk.Label(summary_frame, text="Chưa thực hiện so sánh", font=("Arial", 10, "bold"))
-        self.summary_label.pack()
+    def find_next(self):
+        self.find_text = self.find_entry.get()
+        if not self.find_text:
+            return
+            
+        # Clear previous selection and highlight
+        self.text_widget.tag_remove("sel", "1.0", tk.END)
+        self.text_widget.tag_remove("find_highlight", "1.0", tk.END)
         
-        # Notebook for different views
-        self.notebook = ttk.Notebook(results_frame)
-        self.notebook.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Side-by-side view
-        self.side_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.side_frame, text="So sánh song song")
-        
-        # Left panel (Original)
-        left_frame = ttk.LabelFrame(self.side_frame, text="File gốc (Original)", padding="5")
-        left_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5))
-        
-        self.left_text = scrolledtext.ScrolledText(left_frame, wrap=tk.WORD, width=50, height=20)
-        self.left_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Right panel (Translated)
-        right_frame = ttk.LabelFrame(self.side_frame, text="File đã dịch (Translated)", padding="5")
-        right_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(5, 0))
-        
-        self.right_text = scrolledtext.ScrolledText(right_frame, wrap=tk.WORD, width=50, height=20)
-        self.right_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Unified diff view
-        self.diff_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.diff_frame, text="Xem chi tiết khác biệt")
-        
-        self.diff_text = scrolledtext.ScrolledText(self.diff_frame, wrap=tk.WORD, height=25, font=("Courier", 10))
-        self.diff_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
-        
-        # Code changes view
-        self.code_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.code_frame, text="Thay đổi Code")
-        
-        self.code_text = scrolledtext.ScrolledText(self.code_frame, wrap=tk.WORD, height=25, font=("Courier", 10))
-        self.code_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
-        
-        # Configure colors for diff display
-        self.diff_text.tag_config("added", background="#d4edda", foreground="#155724")
-        self.diff_text.tag_config("removed", background="#f8d7da", foreground="#721c24")
-        self.diff_text.tag_config("changed", background="#fff3cd", foreground="#856404")
-        self.diff_text.tag_config("line_number", foreground="#6c757d")
-        
-        self.code_text.tag_config("code_change", background="#ffe6e6", foreground="#d63384")
-        self.code_text.tag_config("safe_change", background="#e6ffe6", foreground="#28a745")
-        
-        # Configure grid weights
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(0, weight=1)  # Input frame
-        main_frame.rowconfigure(2, weight=1)  # Results frame
-        results_frame.columnconfigure(0, weight=1)
-        results_frame.rowconfigure(1, weight=1)
-        self.side_frame.columnconfigure(0, weight=1)
-        self.side_frame.columnconfigure(1, weight=1)
-        self.side_frame.rowconfigure(0, weight=1)
-        left_frame.columnconfigure(0, weight=1)
-        left_frame.rowconfigure(0, weight=1)
-        right_frame.columnconfigure(0, weight=1)
-        right_frame.rowconfigure(0, weight=1)
-        self.diff_frame.columnconfigure(0, weight=1)
-        self.diff_frame.rowconfigure(0, weight=1)
-        self.code_frame.columnconfigure(0, weight=1)
-        self.code_frame.rowconfigure(0, weight=1)
-        
-    def toggle_input_method(self):
-        """Toggle between text input and file selection"""
-        if self.input_method.get() == "text":
-            self.file_frame.grid_remove()
-            self.text_frame.grid()
+        # Search from current position
+        pos = self.text_widget.search(self.find_text, self.last_pos, tk.END)
+        if pos:
+            # Calculate end position
+            end_pos = f"{pos}+{len(self.find_text)}c"
+            
+            # Select found text
+            self.text_widget.tag_add("sel", pos, end_pos)
+            
+            # Add highlight with yellow background
+            self.text_widget.tag_add("find_highlight", pos, end_pos)
+            self.text_widget.tag_config("find_highlight", background="#ffff00", foreground="#000000")
+            
+            # Jump to found text and focus
+            self.text_widget.mark_set("insert", pos)
+            self.text_widget.see(pos)
+            self.text_widget.focus_set()
+            
+            # Update last position for next search
+            self.last_pos = end_pos
         else:
-            self.text_frame.grid_remove()
-            self.file_frame.grid()
+            # Search from beginning
+            pos = self.text_widget.search(self.find_text, "1.0", tk.END)
+            if pos:
+                end_pos = f"{pos}+{len(self.find_text)}c"
+                
+                # Select found text
+                self.text_widget.tag_add("sel", pos, end_pos)
+                
+                # Add highlight with yellow background
+                self.text_widget.tag_add("find_highlight", pos, end_pos)
+                self.text_widget.tag_config("find_highlight", background="#ffff00", foreground="#000000")
+                
+                # Jump to found text and focus
+                self.text_widget.mark_set("insert", pos)
+                self.text_widget.see(pos)
+                self.text_widget.focus_set()
+                
+                self.last_pos = end_pos
+            else:
+                messagebox.showinfo("Không tìm thấy", f"Không tìm thấy: {self.find_text}")
+                self.last_pos = "1.0"
     
-    def get_content(self):
-        """Get content from either text input or files"""
-        if self.input_method.get() == "text":
-            content1 = self.input_text1.get(1.0, tk.END).strip()
-            content2 = self.input_text2.get(1.0, tk.END).strip()
-            return content1, content2
-        else:
-            if not self.file1_path.get() or not self.file2_path.get():
-                return None, None
-            content1 = self.read_file(self.file1_path.get())
-            content2 = self.read_file(self.file2_path.get())
-            return content1, content2
+    def replace_current(self):
+        self.find_text = self.find_entry.get()
+        self.replace_text = self.replace_entry.get()
         
-    def select_file1(self):
-        filename = filedialog.askopenfilename(
-            title="Chọn file gốc",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
-        )
-        if filename:
-            self.file1_path.set(filename)
+        if not self.find_text:
+            return
             
-    def select_file2(self):
-        filename = filedialog.askopenfilename(
-            title="Chọn file đã dịch",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
-        )
-        if filename:
-            self.file2_path.set(filename)
-            
-    def read_file(self, filepath):
+        # Check if there's a selection
         try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                return f.read()
-        except UnicodeDecodeError:
-            try:
-                with open(filepath, 'r', encoding='latin-1') as f:
-                    return f.read()
-            except Exception as e:
-                messagebox.showerror("Lỗi", f"Không thể đọc file: {e}")
-                return None
-        except Exception as e:
-            messagebox.showerror("Lỗi", f"Không thể đọc file: {e}")
-            return None
-    def compare_content(self):
-        """Compare content from either text input or files"""
-        content1, content2 = self.get_content()
-        
-        if content1 is None or content2 is None:
-            if self.input_method.get() == "file":
-                messagebox.showwarning("Cảnh báo", "Vui lòng chọn cả hai file để so sánh")
+            sel_start = self.text_widget.index("sel.first")
+            sel_end = self.text_widget.index("sel.last")
+            selected_text = self.text_widget.get(sel_start, sel_end)
+            
+            if selected_text == self.find_text:
+                # Clear highlight before replacing
+                self.text_widget.tag_remove("find_highlight", "1.0", tk.END)
+                
+                self.text_widget.delete(sel_start, sel_end)
+                self.text_widget.insert(sel_start, self.replace_text)
+                self.last_pos = f"{sel_start}+{len(self.replace_text)}c"
+                # Find next occurrence
+                self.find_next()
             else:
-                messagebox.showwarning("Cảnh báo", "Vui lòng nhập nội dung vào cả hai ô text")
-            return
+                # No matching selection, just find next
+                self.find_next()
+        except tk.TclError:
+            # No selection, just find next
+            self.find_next()
+    
+    def replace_all(self):
+        self.find_text = self.find_entry.get()
+        self.replace_text = self.replace_entry.get()
         
-        if not content1 or not content2:
-            messagebox.showwarning("Cảnh báo", "Nội dung không được để trống")
+        if not self.find_text:
             return
             
-        self.file1_content = content1
-        self.file2_content = content2
+        # Clear highlights
+        self.text_widget.tag_remove("find_highlight", "1.0", tk.END)
         
-        # Clear previous results
-        self.clear_results()
+        content = self.text_widget.get("1.0", tk.END)
+        count = content.count(self.find_text)
         
-        # Show content in side-by-side view
-        self.left_text.insert(tk.END, self.file1_content)
-        self.right_text.insert(tk.END, self.file2_content)
-        
-        # Generate diff
-        self.generate_diff()
-        
-        # Analyze code changes
-        self.analyze_code_changes()
-        
-        # Update summary
-        self.update_summary()
-        
-    def clear_all(self):
-        """Clear all input and results"""
-        self.input_text1.delete(1.0, tk.END)
-        self.input_text2.delete(1.0, tk.END)
-        self.file1_path.set("")
-        self.file2_path.set("")
-        self.clear_results()
-        
-    def generate_diff(self):
-        lines1 = self.file1_content.splitlines()
-        lines2 = self.file2_content.splitlines()
-        
-        diff = difflib.unified_diff(
-            lines1, lines2,
-            fromfile="File gốc",
-            tofile="File đã dịch",
-            lineterm="",
-            n=3
-        )
-        
-        for line in diff:
-            if line.startswith('---') or line.startswith('+++'):
-                self.diff_text.insert(tk.END, line + '\n', "line_number")
-            elif line.startswith('@@'):
-                self.diff_text.insert(tk.END, line + '\n', "line_number")
-            elif line.startswith('-'):
-                self.diff_text.insert(tk.END, line + '\n', "removed")
-            elif line.startswith('+'):
-                self.diff_text.insert(tk.END, line + '\n', "added")
-            else:
-                self.diff_text.insert(tk.END, line + '\n')
-                
-    def analyze_code_changes(self):
-        lines1 = self.file1_content.splitlines()
-        lines2 = self.file2_content.splitlines()
-        
-        # Patterns that might indicate code changes
-        code_patterns = [
-            '<KEY_WAIT>', '<cf>', '<NO_INPUT>', 
-            '{ACTOR}', '{HERO}', '{VALUE}',
-            'IfGender_', 'IfSing_', 'IfSolo(',
-            '<--->'
-        ]
-        
-        matcher = difflib.SequenceMatcher(None, lines1, lines2)
-        
-        code_changes = []
-        safe_changes = []
-        
-        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-            if tag == 'replace':
-                original_lines = lines1[i1:i2]
-                translated_lines = lines2[j1:j2]
-                
-                for orig, trans in zip(original_lines, translated_lines):
-                    # Check if any code pattern changed
-                    code_changed = False
-                    for pattern in code_patterns:
-                        if pattern in orig or pattern in trans:
-                            orig_count = orig.count(pattern)
-                            trans_count = trans.count(pattern)
-                            if orig_count != trans_count:
-                                code_changed = True
-                                break
-                    
-                    if code_changed:
-                        code_changes.append((orig, trans))
-                    else:
-                        safe_changes.append((orig, trans))
-                        
-        # Display results
-        if code_changes:
-            self.code_text.insert(tk.END, "⚠️ CẢNH BÁO: Phát hiện thay đổi code có thể gây lỗi:\n\n", "code_change")
-            for orig, trans in code_changes:
-                self.code_text.insert(tk.END, f"GỐC: {orig}\n", "code_change")
-                self.code_text.insert(tk.END, f"DỊCH: {trans}\n\n", "code_change")
+        if count > 0:
+            new_content = content.replace(self.find_text, self.replace_text)
+            self.text_widget.delete("1.0", tk.END)
+            self.text_widget.insert("1.0", new_content)
+            messagebox.showinfo("Thay thế hoàn tất", f"Đã thay thế {count} lần xuất hiện")
         else:
-            self.code_text.insert(tk.END, "✅ Không phát hiện thay đổi code nguy hiểm\n\n", "safe_change")
-            
-        if safe_changes:
-            self.code_text.insert(tk.END, "📝 Các thay đổi an toàn (chỉ text):\n\n", "safe_change")
-            for orig, trans in safe_changes[:10]:  # Show first 10 safe changes
-                self.code_text.insert(tk.END, f"GỐC: {orig}\n", "safe_change")
-                self.code_text.insert(tk.END, f"DỊCH: {trans}\n\n", "safe_change")
-                
-    def update_summary(self):
-        lines1 = self.file1_content.splitlines()
-        lines2 = self.file2_content.splitlines()
+            messagebox.showinfo("Không tìm thấy", f"Không tìm thấy: {self.find_text}")
         
-        matcher = difflib.SequenceMatcher(None, lines1, lines2)
-        ratio = matcher.ratio()
-        
-        summary = f"Độ tương đồng: {ratio:.2%} | "
-        summary += f"File gốc: {len(lines1)} dòng | "
-        summary += f"File dịch: {len(lines2)} dòng | "
-        
-        # Count changes
-        changes = 0
-        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-            if tag != 'equal':
-                changes += 1
-                
-        summary += f"Số thay đổi: {changes}"
-        
-        self.summary_label.config(text=summary)
-        
-    def clear_results(self):
-        self.left_text.delete(1.0, tk.END)
-        self.right_text.delete(1.0, tk.END)
-        self.diff_text.delete(1.0, tk.END)
-        self.code_text.delete(1.0, tk.END)
-        self.summary_label.config(text="Chưa thực hiện so sánh")
-        
-    def save_results(self):
-        if not self.diff_text.get(1.0, tk.END).strip():
-            messagebox.showwarning("Cảnh báo", "Chưa có kết quả so sánh để lưu")
-            return
-            
-        filename = filedialog.asksaveasfilename(
-            title="Lưu kết quả so sánh",
-            defaultextension=".txt",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
-        )
-        
-        if filename:
-            try:
-                with open(filename, 'w', encoding='utf-8') as f:
-                    f.write("=== KẾT QUẢ SO SÁNH ===\n\n")
-                    if self.input_method.get() == "file":
-                        f.write(f"File gốc: {self.file1_path.get()}\n")
-                        f.write(f"File dịch: {self.file2_path.get()}\n\n")
-                    else:
-                        f.write("Nguồn: Nhập trực tiếp từ text input\n\n")
-                    f.write("=== CHI TIẾT KHÁC BIỆT ===\n")
-                    f.write(self.diff_text.get(1.0, tk.END))
-                    f.write("\n\n=== PHÂN TÍCH CODE ===\n")
-                    f.write(self.code_text.get(1.0, tk.END))
-                    
-                messagebox.showinfo("Thành công", f"Đã lưu kết quả vào: {filename}")
-            except Exception as e:
-                messagebox.showerror("Lỗi", f"Không thể lưu file: {e}")
+        self.last_pos = "1.0"
+    
+    def close(self):
+        # Clear highlights when closing
+        self.text_widget.tag_remove("find_highlight", "1.0", tk.END)
+        self.dialog.destroy()
+        self.dialog = None
 
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = FileComparator(root)
-    root.mainloop()
+# ----------------------------
+# Copy log functionality
+# ----------------------------
+def copy_error_log():
+    """Copy all error messages to clipboard"""
+    if not error_data:
+        root.clipboard_clear()
+        root.clipboard_append("OK! Không phát hiện thiếu dòng/tag/biến.")
+        messagebox.showinfo("Đã copy", "Đã copy log lỗi vào clipboard!")
+        return
+    
+    # Create formatted error log
+    log_text = "=== LOG LỖI DỊCH THUẬT ===\n\n"
+    for i, error in enumerate(error_data, 1):
+        log_text += f"{i}. {error['msg']}\n"
+    
+    log_text += f"\n=== TỔNG CỘNG: {len(error_data)} LỖI ==="
+    
+    # Copy to clipboard
+    root.clipboard_clear()
+    root.clipboard_append(log_text)
+    messagebox.showinfo("Đã copy", f"Đã copy {len(error_data)} lỗi vào clipboard!")
+
+# ----------------------------
+# Setup text widget with undo/redo
+# ----------------------------
+def setup_text_widget(widget):
+    """Setup undo/redo and find/replace for text widget"""
+    # Enable undo
+    widget.config(undo=True, maxundo=50)
+    
+    # Create find/replace dialog instance
+    find_dialog = FindReplaceDialog(root, widget)
+    
+    # Bind keyboard shortcuts
+    widget.bind('<Control-z>', lambda e: widget.edit_undo())
+    widget.bind('<Control-y>', lambda e: widget.edit_redo())
+    
+    # Bind Ctrl+H and prevent default behavior (backspace)
+    def open_find_dialog(event):
+        find_dialog.show()
+        return "break"  # Prevent default behavior
+    
+    widget.bind('<Control-h>', open_find_dialog)
+    widget.bind('<Control-H>', open_find_dialog)  # Uppercase H
+    
+    return find_dialog
+
+# ----------------------------
+# Main check callback
+# ----------------------------
+def check_translation():
+    global error_data
+    error_data = []
+
+    original_text = txt_original.get("1.0", tk.END).rstrip("\n")
+    translated_text = txt_translated.get("1.0", tk.END).rstrip("\n")
+
+    if not original_text or not translated_text:
+        messagebox.showwarning("Thiếu dữ liệu", "Hãy nhập cả hai nội dung để kiểm tra.")
+        return
+
+    orig_lines = original_text.splitlines()
+    trans_lines = translated_text.splitlines()
+
+    orig_blocks = split_blocks(orig_lines)
+    trans_blocks = split_blocks(trans_lines)
+
+    # collect errors
+    if not orig_blocks and not trans_blocks:
+        compare_plain(orig_lines, trans_lines, error_data)
+    else:
+        # missing / extra keys
+        for key in orig_blocks:
+            if key not in trans_blocks:
+                _add_error(error_data, f"[Thiếu key] {key}", key, None, None, None)
+        for key in trans_blocks:
+            if key not in orig_blocks:
+                _add_error(error_data, f"[Key dư] {key}", key, None, None, None)
+
+        # compare shared keys
+        for key, o_block in orig_blocks.items():
+            if key not in trans_blocks:
+                continue
+            t_block = trans_blocks[key]
+            compare_block(key, o_block, t_block, error_data)
+
+    # Update error list UI
+    refresh_error_list_ui()
+
+    # Apply highlights
+    apply_highlights()
+
+def refresh_error_list_ui():
+    lb_errors.delete(0, tk.END)
+    if not error_data:
+        lb_errors.insert(tk.END, "OK! Không phát hiện thiếu dòng/tag/biến.")
+    else:
+        for e in error_data:
+            lb_errors.insert(tk.END, e["msg"])
+
+def apply_highlights():
+    clear_highlights()
+    for idx, e in enumerate(error_data):
+        if e["orig_line"] is not None:
+            tag = f"{ERROR_TAG_PREFIX}{idx}"
+            highlight_line(txt_original, tag, e["orig_line"], "#fff5b1")  # vàng nhạt
+        if e["trans_line"] is not None:
+            tag = f"{ERROR_TAG_TRANS_PREFIX}{idx}"
+            highlight_line(txt_translated, tag, e["trans_line"], "#ffd6d6")  # hồng nhạt
+
+# ----------------------------
+# Click handler
+# ----------------------------
+def on_error_select(event):
+    # which row?
+    sel = lb_errors.curselection()
+    if not sel:
+        return
+    idx = sel[0]
+    if idx >= len(error_data):
+        return  # maybe the OK line
+    e = error_data[idx]
+
+    if e["orig_line"] is not None:
+        jump_to_line(txt_original, e["orig_line"])
+    if e["trans_line"] is not None:
+        jump_to_line(txt_translated, e["trans_line"])
+    else:
+        # thiếu dòng dịch -> cuộn cuối
+        end_line = int(float(txt_translated.index("end-1c"))) - 1
+        jump_to_line(txt_translated, max(end_line, 0))
+
+def on_error_keypress(event):
+    """Handle Ctrl+C on error listbox"""
+    if event.state & 0x4 and event.keysym == 'c':  # Ctrl+C
+        copy_error_log()
+
+# ---------------- UI ----------------
+root = tk.Tk()
+root.title("So sánh Tag & Biến từng dòng - Enhanced")
+
+# Columns expand
+root.grid_columnconfigure(0, weight=1)
+root.grid_columnconfigure(1, weight=1)
+root.grid_rowconfigure(1, weight=1)
+
+tk.Label(root, text="Bản gốc:").grid(row=0, column=0, padx=10, pady=5, sticky="w")
+tk.Label(root, text="Bản dịch:").grid(row=0, column=1, padx=10, pady=5, sticky="w")
+
+txt_original = scrolledtext.ScrolledText(root, width=60, height=25, wrap="none")
+txt_original.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
+txt_translated = scrolledtext.ScrolledText(root, width=60, height=25, wrap="none")
+txt_translated.grid(row=1, column=1, padx=10, pady=5, sticky="nsew")
+
+# Setup text widgets with enhanced features
+find_dialog_orig = setup_text_widget(txt_original)
+find_dialog_trans = setup_text_widget(txt_translated)
+
+# Buttons frame
+btn_frame = tk.Frame(root)
+btn_frame.grid(row=2, column=0, columnspan=2, pady=10)
+
+btn_check = tk.Button(btn_frame, text="Kiểm tra", command=check_translation)
+btn_check.pack(side=tk.LEFT, padx=5)
+
+btn_copy = tk.Button(btn_frame, text="Copy Log Lỗi", command=copy_error_log)
+btn_copy.pack(side=tk.LEFT, padx=5)
+
+# Error list frame with label
+error_frame = tk.Frame(root)
+error_frame.grid(row=3, column=0, columnspan=2, padx=10, pady=(0,10), sticky="nsew")
+root.grid_rowconfigure(3, weight=1)
+
+tk.Label(error_frame, text="Danh sách lỗi (Click để nhảy đến dòng, Ctrl+C để copy):").pack(anchor="w")
+
+# Danh sách lỗi click-được
+lb_errors = tk.Listbox(error_frame, width=120, height=8)
+lb_errors.pack(fill="both", expand=True)
+lb_errors.bind("<<ListboxSelect>>", on_error_select)
+lb_errors.bind("<KeyPress>", on_error_keypress)
+
+# Status bar
+status_frame = tk.Frame(root)
+status_frame.grid(row=4, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
+status_label = tk.Label(status_frame, text="Sẵn sàng. Phím tắt: Ctrl+Z (Undo), Ctrl+Y (Redo), Ctrl+H (Find/Replace)", 
+                       anchor="w", fg="gray")
+status_label.pack(fill="x")
+
+root.mainloop()
