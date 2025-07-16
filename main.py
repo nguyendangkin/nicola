@@ -375,12 +375,48 @@ def copy_error_log():
     messagebox.showinfo("Đã copy", f"Đã copy {len(error_data)} lỗi vào clipboard!")
 
 # ----------------------------
-# Setup text widget with undo/redo
+# Setup text widget with unlimited undo/redo
 # ----------------------------
 def setup_text_widget(widget):
-    """Setup undo/redo and find/replace for text widget"""
-    # Enable undo
-    widget.config(undo=True, maxundo=50)
+    """Setup unlimited undo/redo and find/replace for text widget"""
+    # Enable undo with unlimited stack (maxundo=0 means unlimited)
+    widget.config(undo=True, maxundo=0)
+    
+    # Create find/replace dialog instance
+    find_dialog = FindReplaceDialog(root, widget)
+    
+    # Bind keyboard shortcuts with error handling
+    def safe_undo(event):
+        try:
+            widget.edit_undo()
+        except tk.TclError:
+            # Silently ignore if nothing to undo
+            pass
+        return "break"  # Prevent default behavior
+    
+    def safe_redo(event):
+        try:
+            widget.edit_redo()
+        except tk.TclError:
+            # Silently ignore if nothing to redo
+            pass
+        return "break"  # Prevent default behavior
+    
+    widget.bind('<Control-z>', safe_undo)
+    widget.bind('<Control-y>', safe_redo)
+    
+    # Bind Ctrl+H and prevent default behavior (backspace)
+    def open_find_dialog(event):
+        find_dialog.show()
+        return "break"  # Prevent default behavior
+    
+    widget.bind('<Control-h>', open_find_dialog)
+    widget.bind('<Control-H>', open_find_dialog)  # Uppercase H
+    
+    return find_dialog
+    """Setup unlimited undo/redo and find/replace for text widget"""
+    # Enable undo with unlimited stack (maxundo=0 means unlimited)
+    widget.config(undo=True, maxundo=0)
     
     # Create find/replace dialog instance
     find_dialog = FindReplaceDialog(root, widget)
@@ -536,7 +572,7 @@ lb_errors.bind("<KeyPress>", on_error_keypress)
 # Status bar
 status_frame = tk.Frame(root)
 status_frame.grid(row=4, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
-status_label = tk.Label(status_frame, text="Sẵn sàng. Phím tắt: Ctrl+Z (Undo), Ctrl+Y (Redo), Ctrl+H (Find/Replace)", 
+status_label = tk.Label(status_frame, text="Sẵn sàng. Phím tắt: Ctrl+Z (Undo), Ctrl+Y (Redo), Ctrl+H (Find/Replace) - Undo/Redo không giới hạn", 
                        anchor="w", fg="gray")
 status_label.pack(fill="x")
 
