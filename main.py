@@ -15,8 +15,22 @@ def normalize_tag(tag: str) -> str:
     return tag.split("(", 1)[0].strip()
 
 def extract_tags(text: str):
+    """
+    Trả về danh sách các tuple (tag_name, param_count).
+    Ví dụ: '<IfGender_ACTOR(him,her,it)>' -> ('IfGender_ACTOR', 3)
+    """
     tags = TAG_RE.findall(text)
-    return [normalize_tag(tag) for tag in tags]
+    result = []
+    for tag in tags:
+        tag_name = normalize_tag(tag)
+        # Đếm số lượng tham số nếu có dấu ngoặc
+        if "(" in tag and ")" in tag:
+            params = tag[tag.find("(")+1:tag.rfind(")")].strip()
+            param_count = len([p for p in params.split(",") if p.strip()]) if params else 0
+        else:
+            param_count = 0
+        result.append((tag_name, param_count))
+    return result
 
 def extract_vars(text: str):
     return VAR_RE.findall(text)
@@ -132,16 +146,26 @@ def compare_block(key, o_block, t_block, errors):
         extra_tags = list((t_tags - o_tags).elements())
         extra_vars = list((t_vars - o_vars).elements())
 
-        if miss_tags or miss_vars or extra_tags or extra_vars:
+        # Kiểm tra số lượng tham số cho các tag giống nhau
+        tag_param_errors = []
+        for (tag_name, o_count) in o_tags:
+            if (tag_name, o_count) in t_tags:
+                t_count = next(count for t_name, count in t_tags if t_name == tag_name)
+                if o_count != t_count:
+                    tag_param_errors.append(f"Tag {tag_name}: Gốc có {o_count} tham số, dịch có {t_count} tham số")
+
+        if miss_tags or miss_vars or extra_tags or extra_vars or tag_param_errors:
             parts = [f"[{key}, dòng {block_line_num}]"]
             if miss_tags:
-                parts.append("Thiếu tag: " + ", ".join(miss_tags))
+                parts.append("Thiếu tag: " + ", ".join(t[0] for t in miss_tags))
             if miss_vars:
                 parts.append("Thiếu biến: " + ", ".join(miss_vars))
             if extra_tags:
-                parts.append("Dư tag: " + ", ".join(extra_tags))
+                parts.append("Dư tag: " + ", ".join(t[0] for t in extra_tags))
             if extra_vars:
                 parts.append("Dư biến: " + ", ".join(extra_vars))
+            if tag_param_errors:
+                parts.extend(tag_param_errors)
             _add_error(
                 errors,
                 "  ".join(parts),
@@ -149,10 +173,11 @@ def compare_block(key, o_block, t_block, errors):
             )
 
 def compare_plain(o_lines, t_lines, errors):
-    """No Txt_ keys found -> treat whole text as one block."""
+    """So sánh toàn văn khi không có key Txt_"""
     o_block = list(enumerate(o_lines))
     t_block = list(enumerate(t_lines))
     compare_block("TOÀN VĂN", o_block, t_block, errors)
+
 
 # ----------------------------
 # Highlight helpers
@@ -404,26 +429,6 @@ def setup_text_widget(widget):
     
     widget.bind('<Control-z>', safe_undo)
     widget.bind('<Control-y>', safe_redo)
-    
-    # Bind Ctrl+H and prevent default behavior (backspace)
-    def open_find_dialog(event):
-        find_dialog.show()
-        return "break"  # Prevent default behavior
-    
-    widget.bind('<Control-h>', open_find_dialog)
-    widget.bind('<Control-H>', open_find_dialog)  # Uppercase H
-    
-    return find_dialog
-    """Setup unlimited undo/redo and find/replace for text widget"""
-    # Enable undo with unlimited stack (maxundo=0 means unlimited)
-    widget.config(undo=True, maxundo=0)
-    
-    # Create find/replace dialog instance
-    find_dialog = FindReplaceDialog(root, widget)
-    
-    # Bind keyboard shortcuts
-    widget.bind('<Control-z>', lambda e: widget.edit_undo())
-    widget.bind('<Control-y>', lambda e: widget.edit_redo())
     
     # Bind Ctrl+H and prevent default behavior (backspace)
     def open_find_dialog(event):
