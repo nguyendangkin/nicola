@@ -1,40 +1,40 @@
 Txt_AppearanceChange_Message_Start
-Xin chàooo~!<KEY_WAIT><cf>Ta đoán là ngươi tới để thay đổi ngoại hình, đúng không nào?<NO_INPUT>
+Gooreetings!<KEY_WAIT><cf>I suppooze you're here to change your appearance.<NO_INPUT>
 Txt_AppearanceChange_Message_First
-Tên ta là Healizah, nhân tiện nhé. Nhìn vậy thôi chứ ta là một chuyên gia thời trang!<cf><KEY_WAIT><cf>Ta có thể cắt tóc, nhuộm màu, thậm chí đổi luôn cả giọng nói cho ngươi nữa cơ! (liếm môi) Chẳng có gì ta không làm được!<cf><KEY_WAIT><cf>Ta sẽ giúp ngươi trở nên lộng lẫy ngay thôi<--->chỉ với một khoản phí nho nhỏ bằng vàng thôi mà.<KEY_WAIT><cf>Vậy thế nào? Có ai mà ngươi muốn "lột xác" không?<NO_INPUT>
+My name's Healizah, by the way. I might not look it, but I'm a fashion gooru!<cf><KEY_WAIT><cf>I can cut your hair and dye it, even change your voice. (slurp) There's not much I can't do!<cf><KEY_WAIT><cf>I'll have you looking your best in no slime<--->for a nominal sum of goold coins, of course.<KEY_WAIT><cf>So how about it? Is there someone whooze appearance you'd like to change?<NO_INPUT>
 Txt_AppearanceChange_Message_Top
-Có ai mà ngươi muốn thay đổi ngoại hình không?
+Is there someone whooze appearance you'd like to change?
 Txt_AppearanceChange_Message_NameSelect
-(liếm môi) Vậy ai là người cần “tút tát” lại nào?<NO_INPUT>
+(slurp) So who needs a makeover?<NO_INPUT>
 Txt_AppearanceChange_Message_LooksSelect
-Được rồi, ngươi sắp thay đổi ngoại hình của {ACTOR}. Ngươi muốn <IfGender_ACTOR(hắn,cô ấy,nó)> trông như thế nào?<NO_INPUT>
+Okay, you're gooing to change {ACTOR}'s appearance. How do you want <IfGender_ACTOR(him,her,it)> to look?<NO_INPUT>
 Txt_AppearanceChange_Message_HairColorSelect
-(liếm môi) Ngươi đã nghĩ đến màu tóc nào chưa?<NO_INPUT>
+(slurp) Do you have a hair colour in mind?<NO_INPUT>
 Txt_AppearanceChange_Message_HairColorSelectHero
-Ờm, kiểu tóc của {HERO} hiện đang là mốt đấy nhé. Nhưng nếu muốn nhuộm thì được thôi! Có màu nào goo không?<NO_INPUT>
+Erm, {HERO}'s hairstyle is already the height of fashion. I can dye it, though! Any goo colours in mind?<NO_INPUT>
 Txt_AppearanceChange_Message_VoiceSelect
-(liếm môi) Ngươi muốn chọn giọng nói như thế nào?
+(slurp) Do you have a particular voice in mind?
 Txt_AppearanceChange_Message_NoChange
-Khoan đã, mọi thứ vẫn y như lúc ngươi bước vào! Ngươi chắc là không muốn thay đổi gì à?<NO_INPUT>
+Hold on, everything's like it was when you walked in here! Are you sure you're not gooing to change anything?<NO_INPUT>
 Txt_AppearanceChange_Message_LooksChangeConfirm
-Phong cách này sẽ tốn {VALUE} vàng <IfSing_VALUE(đồng,đồng)>. Có ổn không?
+Okay, this look will cost {VALUE} goold <IfSing_VALUE(coin,coins)>. Is that alright?
 Txt_AppearanceChange_Message_LooksChangeStart
-Cảm ơn nhiều jelly nhé! Giờ thì, đợi một chút nào...
+Thank you jelly much! Now, just a moment, please...
 Txt_AppearanceChange_Message_LooksChangeFinish
-Ta-da~! Trông ngươi quá đỗi tuyệt vời!
+Ta-da! You look splooper!
 Txt_AppearanceChange_Message_CanNotChangeDeath
-Khoan. Khoan đã. Ngươi định thay đổi ngoại hình của một... người đã chết á? Xin lỗi, nhưng đó là giới hạn mà ta không thể vượt qua.
+Stop. Just stop. You want to change the appearance of a dead gooman? Sorry, that's a line I refooze to cross.
 Txt_AppearanceChange_Message_CanNotChangeHero
-Nghe này, {HERO}, ngươi là một <IfGender_HERO(chàng trai xinh trai,cô nàng xinh gái,người đẹp)> rồi. Nếu là ta thì chẳng đổi gì cả đâu...
+Look, {HERO}, you're a goo-looking <IfGender_HERO(lad,lass,)>. I really wouldn't change a thing if I were you...
 Txt_AppearanceChange_Message_Shortage
-Ôi trời... Ngươi đang sạch túi rồi. Hãy quay lại khi đã tiết kiệm đủ {VALUE} vàng <IfSing_VALUE(đồng,đồng)>, được chứ?
+Oh dear... You, my friend, are broke. Come back when you've saved up {VALUE} goold <IfSing_VALUE(coin,coins)>, okay?
 Txt_AppearanceChange_Message_Cancel
-...Hử? Đổi ý rồi sao? (liếm môi) Ừ thì... cũng được...
+...Eh? You've changed your mind? (slurp) Okay...
 Txt_AppearanceChange_Message_AddChangeConfirm
-Còn ai nữa mà ngươi muốn thay đổi ngoại hình không?<NO_INPUT>
+Anyone else whooze appearance you'd like to change?<NO_INPUT>
 Txt_AppearanceChange_Message_Finish
-Quay lại bất cứ khi nào ngươi muốn thay đổi phong cách nha~ Tạm biệt goo!
+Drop by whenever you feel like trying a new look. Goobye!
 Txt_AppearanceChange_Message_CanNotChange
-Hmm... Xin lỗi, có vẻ như <IfSolo(ngươi không thể,không ai trong các ngươi có thể)> thay đổi ngoại hình ngay lúc này rồi.
+Hmm... Sorry, it seems <IfSolo(you can't,none of you can)> change your appearance right now.
 Txt_AppearanceChange_Message_NoChangeLooks
-Ơ kìa, ngoại hình vẫn giống y như cũ... Ngươi chắc chắn muốn giữ nguyên vậy sao?<NO_INPUT>
+But that's the same look as before... Are you sure you want to goo with this?<NO_INPUT>

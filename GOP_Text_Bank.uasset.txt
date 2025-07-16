@@ -1,13 +1,13 @@
 Txt_Bank_UI_TOP_01
-Gửi tiền
+Deposit
 Txt_Bank_UI_TOP_02
-Rút tiền
+Withdraw
 Txt_Bank_UI_TOP_03
-Huỷ
+Cancel
 Txt_Bank_UI_SelectGoldMenu_01
-Số vàng hiện có
+Current Gold Coins
 Txt_Bank_UI_SelectGoldMenu_02
-Tiền đã gửi
+Current Savings
 Txt_Bank_UI_Gold
 {0}
 Txt_Bank_UI_BalanceGold
@@ -15,44 +15,44 @@ Txt_Bank_UI_BalanceGold
 Txt_Bank_UI_SelectGold
 {0}
 Txt_Bank_UI_Max
-Tất cả vàng
+All Gold Coins
 Txt_Bank_Message_Start_Bar
-*: Chào mừng đến với Ngân Hàng Cuối Cầu Vồng!
+*: Welcome to the Rainbow's End Bank!
 Txt_Bank_Message_First_01_Bar
-*: Hãy yên tâm, chúng tôi sẽ giữ an toàn cho số vàng quý giá của bạn!
+*: You can trust us to keep your hard-earned money safe!
 Txt_Bank_Message_First_02_Bar
-*: Chúng tôi chỉ nhận giao dịch theo bội số của 100 đồng vàng.
+*: Deposits and withdrawals are accepted in multiples of one hundred gold coins.
 Txt_Bank_Message_First_03_Bar
-*: Và tất nhiên, mọi dịch vụ đều hoàn toàn miễn phí!
+*: And, of course, our services are entirely complimentary!
 Txt_Bank_Message_First_04_Bar
-*: Vậy hôm nay tôi có thể giúp gì cho bạn, {LEADER}?<NO_INPUT>
+*: So, how can I help you today, {LEADER}?<NO_INPUT>
 Txt_Bank_Message_TopBalance_Bar
-*: Số dư hiện tại của bạn là {VALUE} đồng vàng. Tôi có thể giúp gì thêm?<NO_INPUT>
+*: Your balance currently stands at {VALUE} gold coins. How may I be of service today?<NO_INPUT>
 Txt_Bank_Message_TopNoBalance_Bar
-*: Bạn hiện không có đồng vàng nào trong tài khoản. Tôi có thể giúp gì cho bạn?<NO_INPUT>
+*: You don't currently have any gold coins in your account. How may I be of service today?<NO_INPUT>
 Txt_Bank_Message_TopBalanceAgain_Bar
-*: Số dư hiện tại của bạn là {VALUE} đồng vàng. Còn điều gì tôi có thể giúp nữa không?<NO_INPUT>
+*: Your balance currently stands at {VALUE} gold coins. Is there any other way I can be of service?<NO_INPUT>
 Txt_Bank_Message_TopNoBalanceAgain_Bar
-*: Tài khoản của bạn hiện chưa có vàng gửi vào. Tôi có thể giúp gì thêm không?<NO_INPUT>
+*: You don't currently have any gold coins in your account. Is there any other way I can be of service?<NO_INPUT>
 Txt_Bank_Message_GoldShortage_Bar
-*: Xin lỗi, nhưng có vẻ bạn không mang đủ vàng như yêu cầu...
+*: I'm very sorry, but you don't seem to have that many gold coins with you...
 Txt_Bank_Message_DepositCannot_Bar
-*: Xin lỗi, kho của chúng tôi hiện đã đầy. Tạm thời không thể nhận thêm gửi tiền.
+*: I'm very sorry, but our vault is full, so we can't accept any more deposits just now.
 Txt_Bank_Message_DepositTop_Bar
-*: Chúng tôi nhận tiền gửi theo bội số của 100 đồng vàng. Bạn muốn gửi bao nhiêu hôm nay?<NO_INPUT>
+*: We accept deposits in increments of one hundred gold coins. How much would you like to deposit today?<NO_INPUT>
 Txt_Bank_Message_Deposit_Bar
-*: {VALUE} đồng vàng? Rất tốt. Chúng tôi sẽ giữ an toàn cho bạn!
+*: {VALUE} gold coins? Very well. We'll keep them safe and sound in our vault for you!
 Txt_Bank_Message_GoldMax_Bar
-*: Rất tiếc, bạn không thể mang nhiều vàng đến vậy.
+*: I'm afraid you can't carry that much.
 Txt_Bank_Message_WithdrawCannot_Bar
-*: Xin lỗi, bạn hiện chưa gửi đồng vàng nào vào ngân hàng cả.
+*: I'm very sorry, but you don't appear to have any gold coins deposited with us just now.
 Txt_Bank_Message_WithdrawTop_Bar
-*: Số dư của bạn là {VALUE} đồng vàng. Bạn muốn rút bao nhiêu?<NO_INPUT>
+*: Your balance currently stands at {VALUE} gold coins. How much would you like to withdraw today?<NO_INPUT>
 Txt_Bank_Message_Withdraw_Bar
-*: {VALUE} đồng vàng à? Rất hân hạnh!<cf>Đây là vàng của bạn!
+*: {VALUE} gold coins? My pleasure!<cf>Here you go!
 Txt_Bank_Message_Cancel_Bar
-*: Vậy là xong hôm nay rồi chứ?
+*: Will that be all for today?
 Txt_Bank_Message_FinishBalance_Bar
-*: Số dư hiện tại là {VALUE} đồng vàng. Cảm ơn bạn đã sử dụng dịch vụ của Ngân Hàng Cuối Cầu Vồng!
+*: Your balance currently stands at {VALUE} gold coins. Thank you for banking with Rainbow's End!
 Txt_Bank_Message_FinishNoBalance_Bar
-*: Bạn hiện chưa có gửi vàng, nhưng mong sớm được phục vụ bạn!
+*: You don't currently have any funds deposited with us, but we hope to serve you soon!
