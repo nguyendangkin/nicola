@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import scrolledtext, messagebox, simpledialog
+from tkinter import scrolledtext, messagebox, simpledialog, ttk
 import re
 from collections import Counter, defaultdict
 
@@ -89,7 +89,7 @@ def split_blocks(lines):
     return blocks
 
 # ==============================================================
-#  Error structure
+#  Error structure - IMPROVED LOG MESSAGES
 # ==============================================================
 # Mỗi lỗi mình lưu dict:
 # {
@@ -98,19 +98,21 @@ def split_blocks(lines):
 #   'block_line': int (1-based trong block) or None,
 #   'orig_line': int (0-based global trong text widget),
 #   'trans_line': int (0-based) or None nếu thiếu,
+#   'error_type': str để phân loại lỗi
 # }
 
-def _add_error(result_list, msg, key, block_line, orig_line, trans_line):
+def _add_error(result_list, msg, key, block_line, orig_line, trans_line, error_type="general"):
     result_list.append({
         "msg": msg,
         "key": key,
         "block_line": block_line,
         "orig_line": orig_line,
         "trans_line": trans_line,
+        "error_type": error_type,
     })
 
 # ==============================================================
-#  Compare routines
+#  Compare routines - IMPROVED ERROR MESSAGES
 # ==============================================================
 
 def _group_taginfo(detail_list):
@@ -157,13 +159,13 @@ def compare_block(key, o_block, t_block, errors):
             _add_error(
                 errors,
                 f"[{key}] Thiếu {len_o - len_t} dòng trong bản dịch (gốc: {len_o}, dịch: {len_t}).",
-                key, None, None, None
+                key, None, None, None, "missing_lines"
             )
         else:
             _add_error(
                 errors,
                 f"[{key}] Dư {len_t - len_o} dòng trong bản dịch (gốc: {len_o}, dịch: {len_t}).",
-                key, None, None, None
+                key, None, None, None, "extra_lines"
             )
 
     max_len = max(len_o, len_t)
@@ -180,31 +182,27 @@ def compare_block(key, o_block, t_block, errors):
             t_global_idx, t_text = t_block[idx]
             t_stripped = t_text.strip()
         else:
-            # Thiếu dòng dịch
+            # Thiếu dòng dịch - IMPROVED MESSAGE
             snippet = o_stripped[:60]
             _add_error(
                 errors,
-                f"[{key}, dòng {block_line_num}] Thiếu dòng dịch. Gốc: {snippet}",
-                key, block_line_num, o_global_idx, None
+                f"Ở dòng {o_global_idx + 1} thiếu dòng dịch so với bản gốc. Gốc: {snippet}",
+                key, block_line_num, o_global_idx, None, "missing_line"
             )
             continue
 
-        # gốc có nội dung mà dịch trống
+        # gốc có nội dung mà dịch trống - IMPROVED MESSAGE
         if o_stripped and not t_stripped:
             _add_error(
                 errors,
-                f"[{key}, dòng {block_line_num}] Dòng dịch trống nhưng gốc có nội dung.",
-                key, block_line_num, o_global_idx, t_global_idx
+                f"Ở dòng {t_global_idx + 1} dòng dịch trống nhưng bản gốc có nội dung.",
+                key, block_line_num, o_global_idx, t_global_idx, "empty_translation"
             )
             continue
 
         # ------------------------------------------------------
-        # Tag / var compare  (ĐÃ SỬA LOGIC so với bản cũ)
+        # Tag / var compare - IMPROVED ERROR MESSAGES
         # ------------------------------------------------------
-        # Mục tiêu: tránh tình huống "Thiếu tag X" + "Dư tag X" (vì chỉ sai tham số).
-        # So sánh theo *tên tag*; sau đó kiểm tra số lần xuất hiện và số tham số.
-        # ------------------------------------------------------
-
         o_vars = Counter(extract_vars(o_stripped))
         t_vars = Counter(extract_vars(t_stripped))
 
@@ -246,23 +244,49 @@ def compare_block(key, o_block, t_block, errors):
                 if msg:
                     param_msgs.append(msg)
 
-        # Gom thông điệp
-        if miss_tag_names or extra_tag_names or miss_vars or extra_vars or param_msgs:
-            parts = [f"[{key}, dòng {block_line_num}]"]
-            if miss_tag_names:
-                parts.append("Thiếu tag: " + ", ".join(miss_tag_names))
-            if extra_tag_names:
-                parts.append("Dư tag: " + ", ".join(extra_tag_names))
-            if miss_vars:
-                parts.append("Thiếu biến: " + ", ".join(miss_vars))
-            if extra_vars:
-                parts.append("Dư biến: " + ", ".join(extra_vars))
-            parts.extend(param_msgs)
-            _add_error(
-                errors,
-                "  ".join(parts),
-                key, block_line_num, o_global_idx, t_global_idx
-            )
+        # Gom thông điệp với format mới dễ hiểu hơn
+        line_num = t_global_idx + 1 if t_global_idx is not None else o_global_idx + 1
+        
+        # Tạo các thông báo lỗi riêng biệt cho từng loại
+        if miss_tag_names:
+            for tag_name in miss_tag_names:
+                _add_error(
+                    errors,
+                    f"Ở dòng {line_num} thiếu tag <{tag_name}> so với bản gốc",
+                    key, block_line_num, o_global_idx, t_global_idx, "missing_tag"
+                )
+                
+        if extra_tag_names:
+            for tag_name in extra_tag_names:
+                _add_error(
+                    errors,
+                    f"Ở dòng {line_num} thừa tag <{tag_name}> so với bản gốc",
+                    key, block_line_num, o_global_idx, t_global_idx, "extra_tag"
+                )
+                
+        if miss_vars:
+            for var in miss_vars:
+                _add_error(
+                    errors,
+                    f"Ở dòng {line_num} thiếu biến {var} so với bản gốc",
+                    key, block_line_num, o_global_idx, t_global_idx, "missing_var"
+                )
+                
+        if extra_vars:
+            for var in extra_vars:
+                _add_error(
+                    errors,
+                    f"Ở dòng {line_num} thừa biến {var} so với bản gốc",
+                    key, block_line_num, o_global_idx, t_global_idx, "extra_var"
+                )
+                
+        if param_msgs:
+            for param_msg in param_msgs:
+                _add_error(
+                    errors,
+                    f"Ở dòng {line_num} sai tham số: {param_msg}",
+                    key, block_line_num, o_global_idx, t_global_idx, "wrong_param"
+                )
 
 
 def compare_plain(o_lines, t_lines, errors):
@@ -272,19 +296,78 @@ def compare_plain(o_lines, t_lines, errors):
     compare_block("TOÀN VĂN", o_block, t_block, errors)
 
 # ==============================================================
-#  Highlight helpers
+#  Line number widget
+# ==============================================================
+class LineNumberWidget(tk.Text):
+    def __init__(self, parent, text_widget, **kwargs):
+        super().__init__(parent, **kwargs)
+        self.text_widget = text_widget
+        self.config(
+            width=4,
+            padx=3,
+            takefocus=0,
+            border=0,
+            state='disabled',
+            wrap='none',
+            background='#f0f0f0',
+            foreground='#666666'
+        )
+        
+        self.text_widget.bind('<KeyPress>', self.on_key_press)
+        self.text_widget.bind('<KeyRelease>', self.on_key_release)
+        self.text_widget.bind('<Button-1>', self.on_mouse_click)
+        self.text_widget.bind('<MouseWheel>', self.on_mouse_wheel)
+        self.text_widget.bind('<Configure>', self.on_configure)
+        
+        self.update_line_numbers()
+    
+    def on_key_press(self, event):
+        self.after_idle(self.update_line_numbers)
+    
+    def on_key_release(self, event):
+        self.after_idle(self.update_line_numbers)
+    
+    def on_mouse_click(self, event):
+        self.after_idle(self.update_line_numbers)
+    
+    def on_mouse_wheel(self, event):
+        self.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        self.after_idle(self.update_line_numbers)
+    
+    def on_configure(self, event):
+        self.after_idle(self.update_line_numbers)
+    
+    def update_line_numbers(self):
+        self.config(state='normal')
+        self.delete('1.0', tk.END)
+        
+        # Get the number of lines in the text widget
+        line_count = int(self.text_widget.index('end-1c').split('.')[0])
+        
+        # Generate line numbers
+        line_numbers = '\n'.join(str(i) for i in range(1, line_count + 1))
+        self.insert('1.0', line_numbers)
+        
+        # Sync scrolling
+        self.yview_moveto(self.text_widget.yview()[0])
+        
+        self.config(state='disabled')
+
+# ==============================================================
+#  Highlight helpers - IMPROVED HIGHLIGHTING
 # ==============================================================
 ERROR_TAG_PREFIX = "ERR_"
 ERROR_TAG_TRANS_PREFIX = "ERRT_"
+CURRENT_ERROR_TAG = "CURRENT_ERR"
 
 
 def clear_highlights():
     # remove all tags we've added
     for tag in txt_original.tag_names():
-        if tag.startswith(ERROR_TAG_PREFIX):
+        if tag.startswith(ERROR_TAG_PREFIX) or tag == CURRENT_ERROR_TAG:
             txt_original.tag_delete(tag)
     for tag in txt_translated.tag_names():
-        if tag.startswith(ERROR_TAG_TRANS_PREFIX):
+        if tag.startswith(ERROR_TAG_TRANS_PREFIX) or tag == CURRENT_ERROR_TAG:
             txt_translated.tag_delete(tag)
 
 
@@ -294,6 +377,25 @@ def highlight_line(widget, tag, line_index, bgcolor):
     end = f"{line_index + 1}.0 lineend"
     widget.tag_add(tag, start, end)
     widget.tag_config(tag, background=bgcolor)
+
+
+def highlight_current_error(orig_line, trans_line):
+    """Highlight current selected error with underline instead of background color"""
+    # Clear previous current error highlights
+    txt_original.tag_delete(CURRENT_ERROR_TAG)
+    txt_translated.tag_delete(CURRENT_ERROR_TAG)
+    
+    if orig_line is not None:
+        start = f"{orig_line + 1}.0"
+        end = f"{orig_line + 1}.0 lineend"
+        txt_original.tag_add(CURRENT_ERROR_TAG, start, end)
+        txt_original.tag_config(CURRENT_ERROR_TAG, underline=True, underlinefg="red")
+    
+    if trans_line is not None:
+        start = f"{trans_line + 1}.0"
+        end = f"{trans_line + 1}.0 lineend"
+        txt_translated.tag_add(CURRENT_ERROR_TAG, start, end)
+        txt_translated.tag_config(CURRENT_ERROR_TAG, underline=True, underlinefg="red")
 
 
 def jump_to_line(widget, line_index):
@@ -459,7 +561,7 @@ def copy_error_log():
 
 def setup_text_widget(widget):
     """Setup unlimited undo/redo and find/replace for text widget"""
-    widget.config(undo=True, maxundo=0)
+    widget.config(undo=True, maxundo=0, wrap="none")  # Added wrap="none" for horizontal scroll
     find_dialog = FindReplaceDialog(root, widget)
 
     def safe_undo(event):
@@ -513,10 +615,10 @@ def check_translation():
     else:
         for key in orig_blocks:
             if key not in trans_blocks:
-                _add_error(error_data, f"[Thiếu key] {key}", key, None, None, None)
+                _add_error(error_data, f"[Thiếu key] {key}", key, None, None, None, "missing_key")
         for key in trans_blocks:
             if key not in orig_blocks:
-                _add_error(error_data, f"[Key dư] {key}", key, None, None, None)
+                _add_error(error_data, f"[Key dư] {key}", key, None, None, None, "extra_key")
         for key, o_block in orig_blocks.items():
             if key not in trans_blocks:
                 continue
@@ -525,6 +627,10 @@ def check_translation():
 
     refresh_error_list_ui()
     apply_highlights()
+    
+    # Update line numbers after checking
+    line_numbers_orig.update_line_numbers()
+    line_numbers_trans.update_line_numbers()
 
 # ==============================================================
 #  Error list UI helpers
@@ -550,7 +656,7 @@ def apply_highlights():
             highlight_line(txt_translated, tag, e["trans_line"], "#ffd6d6")  # hồng nhạt
 
 # ==============================================================
-#  Click handler
+#  Click handler - IMPROVED WITH UNDERLINE HIGHLIGHTING
 # ==============================================================
 
 def on_error_select(event):
@@ -561,6 +667,10 @@ def on_error_select(event):
     if idx >= len(error_data):
         return  # maybe the OK line
     e = error_data[idx]
+    
+    # Highlight current error with underline
+    highlight_current_error(e["orig_line"], e["trans_line"])
+    
     if e["orig_line"] is not None:
         jump_to_line(txt_original, e["orig_line"])
     if e["trans_line"] is not None:
@@ -576,10 +686,10 @@ def on_error_keypress(event):
         copy_error_log()
 
 # ==============================================================
-#  UI setup
+#  UI setup - IMPROVED WITH LINE NUMBERS AND HORIZONTAL SCROLL
 # ==============================================================
 root = tk.Tk()
-root.title("So sánh Tag & Biến từng dòng - Enhanced (ParamMatch)")
+root.title("So sánh Tag & Biến từng dòng - Enhanced với Số dòng")
 
 # Columns expand
 root.grid_columnconfigure(0, weight=1)
@@ -589,10 +699,48 @@ root.grid_rowconfigure(1, weight=1)
 tk.Label(root, text="Bản gốc:").grid(row=0, column=0, padx=10, pady=5, sticky="w")
 tk.Label(root, text="Bản dịch:").grid(row=0, column=1, padx=10, pady=5, sticky="w")
 
-txt_original = scrolledtext.ScrolledText(root, width=60, height=25, wrap="none")
-txt_original.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
-txt_translated = scrolledtext.ScrolledText(root, width=60, height=25, wrap="none")
-txt_translated.grid(row=1, column=1, padx=10, pady=5, sticky="nsew")
+# Create frames for text widgets with line numbers
+orig_frame = tk.Frame(root)
+orig_frame.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
+orig_frame.grid_columnconfigure(1, weight=1)
+orig_frame.grid_rowconfigure(0, weight=1)
+
+trans_frame = tk.Frame(root)
+trans_frame.grid(row=1, column=1, padx=10, pady=5, sticky="nsew")
+trans_frame.grid_columnconfigure(1, weight=1)
+trans_frame.grid_rowconfigure(0, weight=1)
+
+# Create text widgets with horizontal scroll
+txt_original = tk.Text(orig_frame, width=60, height=25, wrap="none", undo=True, maxundo=0)
+txt_original.grid(row=0, column=1, sticky="nsew")
+
+txt_translated = tk.Text(trans_frame, width=60, height=25, wrap="none", undo=True, maxundo=0)
+txt_translated.grid(row=0, column=1, sticky="nsew")
+
+# Create line number widgets
+line_numbers_orig = LineNumberWidget(orig_frame, txt_original)
+line_numbers_orig.grid(row=0, column=0, sticky="nsew")
+
+line_numbers_trans = LineNumberWidget(trans_frame, txt_translated)
+line_numbers_trans.grid(row=0, column=0, sticky="nsew")
+
+# Add horizontal scrollbars
+h_scroll_orig = tk.Scrollbar(orig_frame, orient=tk.HORIZONTAL, command=txt_original.xview)
+h_scroll_orig.grid(row=1, column=1, sticky="ew")
+txt_original.config(xscrollcommand=h_scroll_orig.set)
+
+h_scroll_trans = tk.Scrollbar(trans_frame, orient=tk.HORIZONTAL, command=txt_translated.xview)
+h_scroll_trans.grid(row=1, column=1, sticky="ew")
+txt_translated.config(xscrollcommand=h_scroll_trans.set)
+
+# Add vertical scrollbars
+v_scroll_orig = tk.Scrollbar(orig_frame, orient=tk.VERTICAL, command=txt_original.yview)
+v_scroll_orig.grid(row=0, column=2, sticky="ns")
+txt_original.config(yscrollcommand=v_scroll_orig.set)
+
+v_scroll_trans = tk.Scrollbar(trans_frame, orient=tk.VERTICAL, command=txt_translated.yview)
+v_scroll_trans.grid(row=0, column=2, sticky="ns")
+txt_translated.config(yscrollcommand=v_scroll_trans.set)
 
 # Setup text widgets with enhanced features
 find_dialog_orig = setup_text_widget(txt_original)
@@ -615,8 +763,22 @@ root.grid_rowconfigure(3, weight=1)
 
 tk.Label(error_frame, text="Danh sách lỗi (Click để nhảy đến dòng, Ctrl+C để copy):").pack(anchor="w")
 
-lb_errors = tk.Listbox(error_frame, width=120, height=8)
-lb_errors.pack(fill="both", expand=True)
+# Create error listbox with horizontal scroll
+error_list_frame = tk.Frame(error_frame)
+error_list_frame.pack(fill="both", expand=True)
+
+lb_errors = tk.Listbox(error_list_frame, width=120, height=8)
+lb_errors.pack(side=tk.LEFT, fill="both", expand=True)
+
+# Add scrollbars for error list
+error_v_scroll = tk.Scrollbar(error_list_frame, orient=tk.VERTICAL, command=lb_errors.yview)
+error_v_scroll.pack(side=tk.RIGHT, fill="y")
+lb_errors.config(yscrollcommand=error_v_scroll.set)
+
+error_h_scroll = tk.Scrollbar(error_frame, orient=tk.HORIZONTAL, command=lb_errors.xview)
+error_h_scroll.pack(side=tk.BOTTOM, fill="x")
+lb_errors.config(xscrollcommand=error_h_scroll.set)
+
 lb_errors.bind("<<ListboxSelect>>", on_error_select)
 lb_errors.bind("<KeyPress>", on_error_keypress)
 
@@ -625,10 +787,11 @@ status_frame = tk.Frame(root)
 status_frame.grid(row=4, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
 status_label = tk.Label(
     status_frame,
-    text="Sẵn sàng. Phím tắt: Ctrl+Z (Undo), Ctrl+Y (Redo), Ctrl+H (Find/Replace) - Undo/Redo không giới hạn",
+    text="Sẵn sàng. Phím tắt: Ctrl+Z (Undo), Ctrl+Y (Redo), Ctrl+H (Find/Replace) - Có số dòng và scroll ngang",
     anchor="w",
     fg="gray",
 )
 status_label.pack(fill="x")
 
 root.mainloop()
+
