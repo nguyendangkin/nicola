@@ -1,403 +1,568 @@
 "use client";
-import React, { useState, useRef } from "react";
 
-interface ValidationResult {
-    type: string;
-    severity: "error" | "warning" | "info";
-    lineNumber?: number;
-    pairIndex?: number;
-    keyName?: string;
-    message: string;
-    details: string[];
+import React, { useState, useMemo, useRef } from "react";
+import { Input, Button, Space, Typography, Row, Col, Tooltip } from "antd";
+import {
+    CopyOutlined,
+    ClearOutlined,
+    EyeOutlined,
+    PauseCircleFilled,
+    FileExcelFilled,
+} from "@ant-design/icons";
+
+const { TextArea } = Input;
+const { Title } = Typography;
+
+/* ---------------- Types ---------------- */
+
+type DiffStatus = "same" | "added" | "removed" | "modified";
+
+interface DiffWord {
+    text: string;
+    type: DiffStatus;
 }
 
-const TranslationValidator: React.FC = () => {
-    const [originalText, setOriginalText] = useState<string>("");
-    const [translatedText, setTranslatedText] = useState<string>("");
-    const [validationResults, setValidationResults] = useState<
-        ValidationResult[]
-    >([]);
-    const originalTextareaRef = useRef<HTMLTextAreaElement>(null);
-    const translatedTextareaRef = useRef<HTMLTextAreaElement>(null);
+interface WordDiff {
+    original: DiffWord[];
+    translated: DiffWord[];
+}
 
-    const validateTranslation = (): void => {
-        const originalLines = originalText
-            .split("\n")
-            .filter((line) => line.trim() !== "");
-        const translatedLines = translatedText
-            .split("\n")
-            .filter((line) => line.trim() !== "");
-        const results: ValidationResult[] = [];
+interface LineDiff {
+    lineNumber: number;
+    original: string;
+    translated: string;
+    status: DiffStatus;
+    wordDiff: WordDiff | null;
+}
 
-        // Kiểm tra số lượng dòng
-        if (originalLines.length !== translatedLines.length) {
-            results.push({
-                type: "line-count-mismatch",
-                severity: "error",
-                message: `Số lượng dòng không khớp`,
-                details: [
-                    `Bản gốc: ${originalLines.length} dòng`,
-                    `Bản dịch: ${translatedLines.length} dòng`,
-                    `Chênh lệch: ${
-                        originalLines.length - translatedLines.length > 0
-                            ? "+"
-                            : ""
-                    }${originalLines.length - translatedLines.length} dòng`,
-                ],
-            });
+interface ChangedLine {
+    lineNumber: number;
+    index: number;
+    status: DiffStatus;
+}
+
+/* --------------- Component --------------- */
+
+const GameTextComparator: React.FC = () => {
+    const [originalText, setOriginalText] = useState("");
+    const [translatedText, setTranslatedText] = useState("");
+    const [selectedLine, setSelectedLine] = useState<number | null>(null);
+    const [copiedLine, setCopiedLine] = useState("");
+
+    const originalRef = useRef<HTMLDivElement>(null);
+    const translatedRef = useRef<HTMLDivElement>(null);
+
+    const copyToClipboard = (text: string) => {
+        void navigator.clipboard.writeText(text);
+    };
+
+    const clearAll = () => {
+        setOriginalText("");
+        setTranslatedText("");
+        setSelectedLine(null);
+        setCopiedLine("");
+    };
+
+    // Word-level diff
+    const getWordDiff = (original: string, translated: string): WordDiff => {
+        const origWords = original.split(/(\s+)/);
+        const transWords = translated.split(/(\s+)/);
+
+        const maxLength = Math.max(origWords.length, transWords.length);
+        const result: WordDiff = { original: [], translated: [] };
+
+        for (let i = 0; i < maxLength; i++) {
+            const origWord = origWords[i] ?? "";
+            const transWord = transWords[i] ?? "";
+
+            if (origWord === transWord) {
+                result.original.push({ text: origWord, type: "same" });
+                result.translated.push({ text: transWord, type: "same" });
+            } else if (origWord && !transWord) {
+                result.original.push({ text: origWord, type: "removed" });
+                result.translated.push({ text: "", type: "removed" });
+            } else if (!origWord && transWord) {
+                result.original.push({ text: "", type: "added" });
+                result.translated.push({ text: transWord, type: "added" });
+            } else {
+                result.original.push({ text: origWord, type: "modified" });
+                result.translated.push({ text: transWord, type: "modified" });
+            }
         }
 
-        // Kiểm tra từng cặp key-value
-        const maxPairs = Math.floor(
-            Math.min(originalLines.length, translatedLines.length) / 2
+        return result;
+    };
+
+    // Tách thành các dòng để so sánh
+    const { diffResult, changedLines } = useMemo((): {
+        diffResult: LineDiff[];
+        changedLines: ChangedLine[];
+    } => {
+        const origLines = originalText.split("\n");
+        const transLines = translatedText.split("\n");
+
+        const maxLength = Math.max(origLines.length, transLines.length);
+        const result: LineDiff[] = [];
+        const changed: ChangedLine[] = [];
+
+        for (let i = 0; i < maxLength; i++) {
+            const origLine = origLines[i] ?? "";
+            const transLine = transLines[i] ?? "";
+
+            let status: DiffStatus = "same";
+            if (origLine && !transLine) {
+                status = "removed";
+            } else if (!origLine && transLine) {
+                status = "added";
+            } else if (origLine !== transLine) {
+                status = "modified";
+            }
+
+            const lineData: LineDiff = {
+                lineNumber: i + 1,
+                original: origLine,
+                translated: transLine,
+                status,
+                wordDiff:
+                    status === "modified"
+                        ? getWordDiff(origLine, transLine)
+                        : null,
+            };
+
+            result.push(lineData);
+
+            if (status !== "same") {
+                changed.push({ lineNumber: i + 1, index: i, status });
+            }
+        }
+
+        return { diffResult: result, changedLines: changed };
+    }, [originalText, translatedText]);
+
+    const getLineStyle = (
+        status: DiffStatus,
+        isSelected = false
+    ): React.CSSProperties => {
+        let baseStyle: React.CSSProperties = {};
+
+        switch (status) {
+            case "added":
+                baseStyle = {
+                    backgroundColor: "#e6ffed",
+                    borderLeft: "3px solid #52c41a",
+                    color: "#389e0d",
+                };
+                break;
+            case "removed":
+                baseStyle = {
+                    backgroundColor: "#fff2f0",
+                    borderLeft: "3px solid #ff4d4f",
+                    color: "#cf1322",
+                };
+                break;
+            case "modified":
+                baseStyle = {
+                    backgroundColor: "#fffbe6",
+                    borderLeft: "3px solid #faad14",
+                    color: "#d48806",
+                };
+                break;
+            default:
+                baseStyle = {
+                    backgroundColor: "#fafafa",
+                    borderLeft: "3px solid transparent",
+                };
+        }
+
+        if (isSelected) {
+            return {
+                ...baseStyle,
+                backgroundColor: "#1890ff",
+                color: "white",
+                borderLeft: "3px solid #0050b3",
+            };
+        }
+
+        return baseStyle;
+    };
+
+    const getWordStyle = (type: DiffStatus): React.CSSProperties => {
+        switch (type) {
+            case "added":
+                return {
+                    backgroundColor: "#b7eb8f",
+                    color: "#389e0d",
+                    padding: "2px 4px",
+                    borderRadius: "3px",
+                };
+            case "removed":
+                return {
+                    backgroundColor: "#ffaaa0",
+                    color: "#cf1322",
+                    padding: "2px 4px",
+                    borderRadius: "3px",
+                };
+            case "modified":
+                return {
+                    backgroundColor: "#ffe58f",
+                    color: "#d48806",
+                    padding: "2px 4px",
+                    borderRadius: "3px",
+                };
+            default:
+                return {};
+        }
+    };
+
+    const scrollToLine = (index: number) => {
+        setSelectedLine(index);
+        const elements = document.querySelectorAll<HTMLElement>(
+            `[data-line-index="${index}"]`
         );
-
-        for (let pairIndex = 0; pairIndex < maxPairs; pairIndex++) {
-            const originalKeyIndex = pairIndex * 2;
-            const originalValueIndex = pairIndex * 2 + 1;
-            const translatedKeyIndex = pairIndex * 2;
-            const translatedValueIndex = pairIndex * 2 + 1;
-
-            const originalKey = originalLines[originalKeyIndex];
-            const originalValue = originalLines[originalValueIndex] || "";
-            const translatedKey = translatedLines[translatedKeyIndex] || "";
-            const translatedValue = translatedLines[translatedValueIndex] || "";
-
-            // 1. Kiểm tra KEY phải giống hệt nhau
-            if (originalKey !== translatedKey) {
-                results.push({
-                    type: "key-mismatch",
-                    severity: "error",
-                    lineNumber: originalKeyIndex + 1,
-                    pairIndex: pairIndex + 1,
-                    message: `Key không khớp tại cặp ${pairIndex + 1}`,
-                    details: [
-                        `Bản gốc (dòng ${
-                            originalKeyIndex + 1
-                        }): "${originalKey}"`,
-                        `Bản dịch (dòng ${
-                            translatedKeyIndex + 1
-                        }): "${translatedKey}"`,
-                        `→ Key phải giống hệt nhau, không được thay đổi`,
-                    ],
-                });
-                continue; // Bỏ qua kiểm tra value nếu key sai
-            }
-
-            // 2. Kiểm tra VALUE - HTML tags
-            const originalTags = originalValue.match(/<[^>]+>/g) || [];
-            const translatedTags = translatedValue.match(/<[^>]+>/g) || [];
-
-            if (originalTags.length !== translatedTags.length) {
-                const diff = originalTags.length - translatedTags.length;
-                results.push({
-                    type: "tag-count-mismatch",
-                    severity: "error",
-                    lineNumber: originalValueIndex + 1,
-                    pairIndex: pairIndex + 1,
-                    keyName: originalKey,
-                    message: `Số lượng HTML tag không khớp tại "${originalKey}"`,
-                    details: [
-                        `Bản gốc: ${originalTags.length} tag${
-                            originalTags.length > 0
-                                ? ` (${originalTags.join(", ")})`
-                                : ""
-                        }`,
-                        `Bản dịch: ${translatedTags.length} tag${
-                            translatedTags.length > 0
-                                ? ` (${translatedTags.join(", ")})`
-                                : ""
-                        }`,
-                        `→ ${
-                            diff > 0
-                                ? `Thiếu ${diff} tag`
-                                : `Thừa ${Math.abs(diff)} tag`
-                        } trong bản dịch`,
-                    ],
-                });
-            } else if (originalTags.join("") !== translatedTags.join("")) {
-                results.push({
-                    type: "tag-content-mismatch",
-                    severity: "warning",
-                    lineNumber: originalValueIndex + 1,
-                    pairIndex: pairIndex + 1,
-                    keyName: originalKey,
-                    message: `Nội dung HTML tag không khớp tại "${originalKey}"`,
-                    details: [
-                        `Bản gốc: ${originalTags.join(", ")}`,
-                        `Bản dịch: ${translatedTags.join(", ")}`,
-                        `→ Thứ tự hoặc nội dung tag đã thay đổi`,
-                    ],
-                });
-            }
-
-            // 3. Kiểm tra VALUE - Variables
-            const originalVars = originalValue.match(/\{[^}]+\}/g) || [];
-            const translatedVars = translatedValue.match(/\{[^}]+\}/g) || [];
-
-            if (originalVars.length !== translatedVars.length) {
-                const diff = originalVars.length - translatedVars.length;
-                results.push({
-                    type: "variable-count-mismatch",
-                    severity: "error",
-                    lineNumber: originalValueIndex + 1,
-                    pairIndex: pairIndex + 1,
-                    keyName: originalKey,
-                    message: `Số lượng biến không khớp tại "${originalKey}"`,
-                    details: [
-                        `Bản gốc: ${originalVars.length} biến${
-                            originalVars.length > 0
-                                ? ` (${originalVars.join(", ")})`
-                                : ""
-                        }`,
-                        `Bản dịch: ${translatedVars.length} biến${
-                            translatedVars.length > 0
-                                ? ` (${translatedVars.join(", ")})`
-                                : ""
-                        }`,
-                        `→ ${
-                            diff > 0
-                                ? `Thiếu ${diff} biến`
-                                : `Thừa ${Math.abs(diff)} biến`
-                        } trong bản dịch`,
-                    ],
-                });
-            } else if (originalVars.join("") !== translatedVars.join("")) {
-                results.push({
-                    type: "variable-content-mismatch",
-                    severity: "warning",
-                    lineNumber: originalValueIndex + 1,
-                    pairIndex: pairIndex + 1,
-                    keyName: originalKey,
-                    message: `Nội dung biến không khớp tại "${originalKey}"`,
-                    details: [
-                        `Bản gốc: ${originalVars.join(", ")}`,
-                        `Bản dịch: ${translatedVars.join(", ")}`,
-                        `→ Tên biến đã thay đổi`,
-                    ],
-                });
-            }
-
-            // 4. Kiểm tra VALUE trống
-            if (originalValue.trim() === "" && translatedValue.trim() !== "") {
-                results.push({
-                    type: "unexpected-content",
-                    severity: "warning",
-                    lineNumber: originalValueIndex + 1,
-                    pairIndex: pairIndex + 1,
-                    keyName: originalKey,
-                    message: `Bản dịch có nội dung nhưng bản gốc trống tại "${originalKey}"`,
-                    details: [
-                        `Bản gốc: (trống)`,
-                        `Bản dịch: "${translatedValue}"`,
-                        `→ Không nên thêm nội dung khi bản gốc trống`,
-                    ],
-                });
-            }
-
-            if (originalValue.trim() !== "" && translatedValue.trim() === "") {
-                results.push({
-                    type: "missing-content",
-                    severity: "error",
-                    lineNumber: originalValueIndex + 1,
-                    pairIndex: pairIndex + 1,
-                    keyName: originalKey,
-                    message: `Bản dịch trống nhưng bản gốc có nội dung tại "${originalKey}"`,
-                    details: [
-                        `Bản gốc: "${originalValue}"`,
-                        `Bản dịch: (trống)`,
-                        `→ Thiếu nội dung dịch`,
-                    ],
-                });
-            }
-        }
-
-        setValidationResults(results);
+        elements.forEach((el) => {
+            el.scrollIntoView({ behavior: "smooth", block: "center" });
+        });
     };
 
-    const scrollToLine = (lineNumber: number): void => {
-        if (originalTextareaRef.current) {
-            const textarea = originalTextareaRef.current;
-            const targetLine = Math.max(0, lineNumber - 1);
-            const scrollTop = targetLine * 20;
-            textarea.scrollTop = scrollTop;
-            textarea.focus();
-        }
-        if (translatedTextareaRef.current) {
-            const textarea = translatedTextareaRef.current;
-            const targetLine = Math.max(0, lineNumber - 1);
-            const scrollTop = targetLine * 20;
-            textarea.scrollTop = scrollTop;
-            textarea.focus();
-        }
+    const copyOriginalLine = (lineText: string) => {
+        setCopiedLine(lineText);
+        void navigator.clipboard.writeText(lineText);
     };
 
-    const getSeverityColor = (
-        severity: "error" | "warning" | "info"
-    ): string => {
-        switch (severity) {
-            case "error":
-                return "#ff4d4f";
-            case "warning":
-                return "#faad14";
-            default:
-                return "#d48806";
-        }
+    const pasteToTranslated = (lineIndex: number) => {
+        if (!copiedLine) return;
+
+        const lines = translatedText.split("\n");
+        lines[lineIndex] = copiedLine;
+        setTranslatedText(lines.join("\n"));
+        // Nếu muốn dán nhiều lần, comment dòng dưới:
+        setCopiedLine("");
     };
 
-    const getSeverityBadge = (
-        severity: "error" | "warning" | "info"
-    ): string => {
-        switch (severity) {
-            case "error":
-                return "LỖI";
-            case "warning":
-                return "CẢNH BÁO";
-            default:
-                return "THÔNG TIN";
-        }
+    const renderWords = (words: DiffWord[]) => {
+        return words.map((word, index) => (
+            <span key={index} style={getWordStyle(word.type)}>
+                {word.text}
+            </span>
+        ));
     };
 
     return (
-        <div className="p-6 max-w-7xl mx-auto">
-            <div className="bg-white rounded-lg shadow-lg p-6">
-                <h1 className="text-2xl font-bold text-gray-800 mb-6">
-                    Translation Validator (Key-Value Pairs)
-                </h1>
+        <div style={{ padding: "20px", maxWidth: "1400px", margin: "0 auto" }}>
+            <Title
+                level={2}
+                style={{ textAlign: "center", marginBottom: "30px" }}
+            >
+                Game Text Comparator
+            </Title>
 
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-                    <div>
-                        <label className="block text-sm font-semibold text-gray-700 mb-2">
-                            Bản gốc (Tiêu chuẩn)
-                        </label>
-                        <textarea
-                            ref={originalTextareaRef}
-                            value={originalText}
-                            onChange={(
-                                e: React.ChangeEvent<HTMLTextAreaElement>
-                            ) => setOriginalText(e.target.value)}
-                            className="w-full h-96 p-3 border border-gray-300 rounded-lg font-mono text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            placeholder="Ví dụ:
-key1
-Hello {name}
-key2
-<b>Welcome</b> to our app"
-                        />
+            <Space
+                style={{
+                    marginBottom: "20px",
+                    width: "100%",
+                    justifyContent: "center",
+                }}
+            >
+                <Button
+                    type="primary"
+                    icon={<CopyOutlined />}
+                    onClick={() => copyToClipboard(originalText)}
+                >
+                    Copy Original
+                </Button>
+                <Button
+                    type="primary"
+                    icon={<CopyOutlined />}
+                    onClick={() => copyToClipboard(translatedText)}
+                >
+                    Copy Translated
+                </Button>
+                <Button icon={<ClearOutlined />} onClick={clearAll}>
+                    Clear All
+                </Button>
+            </Space>
+
+            {/* Input areas */}
+            <Row gutter={16} style={{ marginBottom: "20px" }}>
+                <Col span={12}>
+                    <div style={{ marginBottom: "8px", fontWeight: "bold" }}>
+                        Original Text:
                     </div>
+                    <TextArea
+                        value={originalText}
+                        onChange={(e) => setOriginalText(e.target.value)}
+                        placeholder="Paste original game text here..."
+                        rows={10}
+                        style={{ fontFamily: "monospace", fontSize: "14px" }}
+                    />
+                </Col>
 
-                    <div>
-                        <label className="block text-sm font-semibold text-gray-700 mb-2">
-                            Bản dịch (Cần kiểm tra)
-                        </label>
-                        <textarea
-                            ref={translatedTextareaRef}
-                            value={translatedText}
-                            onChange={(
-                                e: React.ChangeEvent<HTMLTextAreaElement>
-                            ) => setTranslatedText(e.target.value)}
-                            className="w-full h-96 p-3 border border-gray-300 rounded-lg font-mono text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            placeholder="Ví dụ:
-key1
-Xin chào {name}
-key2
-<b>Chào mừng</b> đến với ứng dụng"
-                        />
+                <Col span={12}>
+                    <div style={{ marginBottom: "8px", fontWeight: "bold" }}>
+                        Translated Text:
                     </div>
-                </div>
+                    <TextArea
+                        value={translatedText}
+                        onChange={(e) => setTranslatedText(e.target.value)}
+                        placeholder="Paste translated game text here..."
+                        rows={10}
+                        style={{ fontFamily: "monospace", fontSize: "14px" }}
+                    />
+                </Col>
+            </Row>
 
-                <div className="text-center mb-6">
-                    <button
-                        onClick={validateTranslation}
-                        className="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-6 rounded-lg transition-colors"
-                    >
-                        Kiểm tra bản dịch
-                    </button>
-                </div>
-
-                <div className="bg-gray-50 rounded-lg p-4">
-                    <h2 className="text-lg font-semibold text-gray-800 mb-4">
-                        Kết quả kiểm tra ({validationResults.length} vấn đề)
-                    </h2>
-
-                    {validationResults.length === 0 ? (
-                        <div className="text-center py-8">
-                            <div className="text-green-600 text-lg font-semibold">
-                                ✅ Không có lỗi nào được phát hiện
-                            </div>
-                            <div className="text-gray-600 mt-2">
-                                Bản dịch khớp hoàn toàn với bản gốc
-                            </div>
+            {/* Diff view */}
+            {(originalText || translatedText) && (
+                <Row gutter={16}>
+                    <Col span={12}>
+                        <div
+                            style={{ marginBottom: "8px", fontWeight: "bold" }}
+                        >
+                            Original (Diff View):
                         </div>
-                    ) : (
-                        <div className="space-y-4">
-                            {validationResults.map((result, index) => (
+                        <div
+                            ref={originalRef}
+                            style={{
+                                border: "1px solid #d9d9d9",
+                                borderRadius: "6px",
+                                maxHeight: "400px",
+                                overflowY: "auto",
+                                backgroundColor: "#fafafa",
+                            }}
+                        >
+                            {diffResult.map((line, index) => (
                                 <div
                                     key={index}
-                                    className="bg-white rounded-lg border-l-4 p-4 cursor-pointer hover:bg-gray-50 transition-colors"
+                                    data-line-index={index}
+                                    onClick={() => setSelectedLine(index)}
+                                    onDoubleClick={() => scrollToLine(index)}
                                     style={{
-                                        borderLeftColor: getSeverityColor(
-                                            result.severity
+                                        ...getLineStyle(
+                                            line.status === "added"
+                                                ? "same"
+                                                : line.status,
+                                            selectedLine === index
                                         ),
+                                        padding: "4px 8px",
+                                        fontFamily: "monospace",
+                                        fontSize: "13px",
+                                        borderBottom: "1px solid #f0f0f0",
+                                        minHeight: "24px",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        opacity:
+                                            line.status === "added" ? 0.3 : 1,
+                                        cursor: "pointer",
+                                        transition: "all 0.2s ease",
                                     }}
-                                    onClick={() =>
-                                        result.lineNumber &&
-                                        scrollToLine(result.lineNumber)
-                                    }
                                 >
-                                    <div className="flex items-start gap-3">
-                                        <span
-                                            className="px-2 py-1 text-xs font-semibold rounded text-white"
-                                            style={{
-                                                backgroundColor:
-                                                    getSeverityColor(
-                                                        result.severity
-                                                    ),
-                                            }}
-                                        >
-                                            {getSeverityBadge(result.severity)}
-                                        </span>
-                                        <div className="flex-1">
-                                            <div className="font-semibold text-gray-800 mb-1">
-                                                {result.lineNumber &&
-                                                    `[Dòng ${result.lineNumber}] `}
-                                                {result.message}
-                                            </div>
-                                            {result.keyName && (
-                                                <div className="text-sm text-gray-600 mb-2">
-                                                    🔑 Key:{" "}
-                                                    <code className="bg-gray-100 px-1 rounded">
-                                                        {result.keyName}
-                                                    </code>
-                                                </div>
-                                            )}
-                                            <div className="text-sm text-gray-700 space-y-1">
-                                                {result.details.map(
-                                                    (detail, i) => (
-                                                        <div
-                                                            key={i}
-                                                            className={
-                                                                detail.startsWith(
-                                                                    "→"
-                                                                )
-                                                                    ? "text-red-600 font-medium"
-                                                                    : ""
-                                                            }
-                                                        >
-                                                            {detail}
-                                                        </div>
-                                                    )
-                                                )}
-                                            </div>
-                                        </div>
-                                    </div>
+                                    <span
+                                        style={{
+                                            color: "#8c8c8c",
+                                            width: "30px",
+                                            textAlign: "right",
+                                            marginRight: "8px",
+                                            fontSize: "11px",
+                                        }}
+                                    >
+                                        {line.original ? line.lineNumber : ""}
+                                    </span>
+                                    <span style={{ flex: 1 }}>
+                                        {line.wordDiff
+                                            ? renderWords(
+                                                  line.wordDiff.original
+                                              )
+                                            : line.original}
+                                    </span>
+                                    {line.status !== "same" &&
+                                        line.status !== "added" &&
+                                        line.original && (
+                                            <Tooltip title="Copy this line">
+                                                <Button
+                                                    type="text"
+                                                    size="small"
+                                                    icon={<CopyOutlined />}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        copyOriginalLine(
+                                                            line.original
+                                                        );
+                                                    }}
+                                                    style={{
+                                                        marginLeft: "8px",
+                                                    }}
+                                                />
+                                            </Tooltip>
+                                        )}
                                 </div>
                             ))}
                         </div>
-                    )}
+                    </Col>
+
+                    <Col span={12}>
+                        <div
+                            style={{ marginBottom: "8px", fontWeight: "bold" }}
+                        >
+                            Translated (Diff View):
+                        </div>
+                        <div
+                            ref={translatedRef}
+                            style={{
+                                border: "1px solid #d9d9d9",
+                                borderRadius: "6px",
+                                maxHeight: "400px",
+                                overflowY: "auto",
+                                backgroundColor: "#fafafa",
+                            }}
+                        >
+                            {diffResult.map((line, index) => (
+                                <div
+                                    key={index}
+                                    data-line-index={index}
+                                    onClick={() => setSelectedLine(index)}
+                                    onDoubleClick={() => scrollToLine(index)}
+                                    style={{
+                                        ...getLineStyle(
+                                            line.status === "removed"
+                                                ? "same"
+                                                : line.status,
+                                            selectedLine === index
+                                        ),
+                                        padding: "4px 8px",
+                                        fontFamily: "monospace",
+                                        fontSize: "13px",
+                                        borderBottom: "1px solid #f0f0f0",
+                                        minHeight: "24px",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        opacity:
+                                            line.status === "removed" ? 0.3 : 1,
+                                        cursor: "pointer",
+                                        transition: "all 0.2s ease",
+                                    }}
+                                >
+                                    <span
+                                        style={{
+                                            color: "#8c8c8c",
+                                            width: "30px",
+                                            textAlign: "right",
+                                            marginRight: "8px",
+                                            fontSize: "11px",
+                                        }}
+                                    >
+                                        {line.translated ? line.lineNumber : ""}
+                                    </span>
+                                    <span style={{ flex: 1 }}>
+                                        {line.wordDiff
+                                            ? renderWords(
+                                                  line.wordDiff.translated
+                                              )
+                                            : line.translated}
+                                    </span>
+                                    {line.status !== "same" &&
+                                        line.status !== "removed" &&
+                                        copiedLine && (
+                                            <Tooltip title="Paste copied line here">
+                                                <Button
+                                                    type="text"
+                                                    size="small"
+                                                    icon={<FileExcelFilled />}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        pasteToTranslated(
+                                                            index
+                                                        );
+                                                    }}
+                                                    style={{
+                                                        marginLeft: "8px",
+                                                        color: "#52c41a",
+                                                    }}
+                                                />
+                                            </Tooltip>
+                                        )}
+                                </div>
+                            ))}
+                        </div>
+                    </Col>
+                </Row>
+            )}
+
+            {/* Quick Navigation */}
+            {changedLines.length > 0 && (
+                <div
+                    style={{
+                        marginTop: "20px",
+                        marginBottom: "20px",
+                        padding: "10px",
+                        backgroundColor: "#f6ffed",
+                        borderRadius: "6px",
+                        border: "1px solid #b7eb8f",
+                    }}
+                >
+                    <strong>
+                        Quick Navigation ({changedLines.length} differences):
+                    </strong>
+                    <div style={{ marginTop: "8px" }}>
+                        {changedLines.map((line, index) => (
+                            <Button
+                                key={index}
+                                size="small"
+                                type={
+                                    line.status === "modified"
+                                        ? "primary"
+                                        : "default"
+                                }
+                                danger={line.status === "removed"}
+                                style={{
+                                    marginRight: "4px",
+                                    marginBottom: "4px",
+                                }}
+                                onClick={() => scrollToLine(line.index)}
+                                icon={<EyeOutlined />}
+                            >
+                                Line {line.lineNumber}
+                            </Button>
+                        ))}
+                    </div>
                 </div>
-            </div>
+            )}
+
+            {/* Legend */}
+            {(originalText || translatedText) && (
+                <div
+                    style={{
+                        marginTop: "20px",
+                        padding: "10px",
+                        backgroundColor: "#f9f9f9",
+                        borderRadius: "6px",
+                        fontSize: "12px",
+                    }}
+                >
+                    <strong>Legend:</strong>
+                    <span style={{ color: "#52c41a", marginLeft: "10px" }}>
+                        ● Added
+                    </span>
+                    <span style={{ color: "#ff4d4f", marginLeft: "10px" }}>
+                        ● Removed
+                    </span>
+                    <span style={{ color: "#faad14", marginLeft: "10px" }}>
+                        ● Modified
+                    </span>
+                    <span style={{ color: "#8c8c8c", marginLeft: "10px" }}>
+                        ● Same
+                    </span>
+                    <span style={{ color: "#1890ff", marginLeft: "10px" }}>
+                        ● Selected
+                    </span>
+                    <div style={{ marginTop: "5px" }}>
+                        💡 <strong>Tips:</strong> Click line numbers to jump •
+                        Copy from original • Paste to translated • Word-level
+                        highlighting
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
 
-export default TranslationValidator;
+export default GameTextComparator;
