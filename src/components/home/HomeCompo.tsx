@@ -15,7 +15,7 @@ const { Title } = Typography;
 
 /* ---------------- Types ---------------- */
 
-type DiffStatus = "same" | "added" | "removed" | "modified";
+type DiffStatus = "same" | "added" | "removed" | "modified" | "tagdiff"; // <-- added
 
 interface DiffWord {
     text: string;
@@ -31,14 +31,116 @@ interface LineDiff {
     lineNumber: number;
     original: string;
     translated: string;
-    status: DiffStatus;
-    wordDiff: WordDiff | null;
+    status: DiffStatus; // text-level status (added/removed/modified/same)
+    tagDiff: boolean; // whether tags differ between original & translated
+    tagReport: TagReport | null; // details of tag diff (missing/extra)
+    wordDiff: WordDiff | null; // character-level diff for visual
 }
 
 interface ChangedLine {
     lineNumber: number;
     index: number;
-    status: DiffStatus;
+    status: DiffStatus; // will always be "tagdiff" in QuickNav now
+    tagReport: TagReport;
+}
+
+/* ---- Tag extraction / comparison helpers ---- */
+
+interface ExtractedTags {
+    angle: string[]; // <...>
+    curly: string[]; // {...}
+    square: string[]; // [...]
+}
+
+interface TagReport {
+    missing: string[]; // present in original, absent in translated
+    extra: string[]; // present in translated, absent in original
+    mismatchCounts?: boolean; // convenience flag when counts differ even if tokens text-same (rare)
+}
+
+// Global regexes. We capture the full token, including delimiters, so we can do string compare.
+const ANGLE_RE = /<[^>]*>/g; // greedy enough; game tags do not nest literal '>'
+const CURLY_RE = /\{[^}]*\}/g;
+const SQUARE_RE = /\[[^\]]*\]/g;
+
+/** Extract tag-like tokens from a line of text. */
+function extractTags(line: string): ExtractedTags {
+    const angle = line.match(ANGLE_RE) ?? [];
+    const curly = line.match(CURLY_RE) ?? [];
+    const square = line.match(SQUARE_RE) ?? [];
+    return { angle, curly, square };
+}
+
+/** Build a multiset map (token -> count). */
+function multiset(tokens: string[]): Record<string, number> {
+    const map: Record<string, number> = {};
+    for (const t of tokens) {
+        map[t] = (map[t] || 0) + 1;
+    }
+    return map;
+}
+
+/** Compare original vs translated token arrays, return report. */
+function compareTokenSets(orig: string[], trans: string[]): TagReport | null {
+    const origMap = multiset(orig);
+    const transMap = multiset(trans);
+    const missing: string[] = [];
+    const extra: string[] = [];
+    let mismatchCounts = false;
+
+    // anything in orig missing or count smaller in trans
+    for (const tok of Object.keys(origMap)) {
+        const o = origMap[tok];
+        const t = transMap[tok] ?? 0;
+        if (t === 0) {
+            missing.push(tok + (o > 1 ? ` x${o}` : ""));
+        } else if (t < o) {
+            mismatchCounts = true;
+            missing.push(tok + ` x${o - t}`);
+        }
+    }
+    // anything in trans not in orig or count larger
+    for (const tok of Object.keys(transMap)) {
+        const t = transMap[tok];
+        const o = origMap[tok] ?? 0;
+        if (o === 0) {
+            extra.push(tok + (t > 1 ? ` x${t}` : ""));
+        } else if (t > o) {
+            mismatchCounts = true;
+            extra.push(tok + ` x${t - o}`);
+        }
+    }
+
+    if (missing.length === 0 && extra.length === 0 && !mismatchCounts) {
+        return null; // identical
+    }
+    return { missing, extra, mismatchCounts };
+}
+
+/** Compare all 3 tag classes together. */
+function compareTags(
+    orig: ExtractedTags,
+    trans: ExtractedTags
+): TagReport | null {
+    // merge results from each token class
+    const repA = compareTokenSets(orig.angle, trans.angle);
+    const repC = compareTokenSets(orig.curly, trans.curly);
+    const repS = compareTokenSets(orig.square, trans.square);
+
+    const missing: string[] = [];
+    const extra: string[] = [];
+    let mismatchCounts = false;
+
+    for (const rep of [repA, repC, repS]) {
+        if (rep) {
+            if (rep.missing.length) missing.push(...rep.missing);
+            if (rep.extra.length) extra.push(...rep.extra);
+            mismatchCounts = mismatchCounts || !!rep.mismatchCounts;
+        }
+    }
+
+    if (!missing.length && !extra.length) return null;
+    return { missing, extra, mismatchCounts };
 }
 
 /* --------------- Component --------------- */
@@ -126,14 +228,20 @@ const GameTextComparator: React.FC = () => {
             if (parts.length === 0) return [];
 
             const grouped: DiffWord[] = [];
-            let current = { text: parts[0].text, type: parts[0].type };
+            let current = {
+                text: parts[0].text,
+                type: parts[0].type,
+            } as DiffWord;
 
             for (let k = 1; k < parts.length; k++) {
                 if (parts[k].type === current.type) {
                     current.text += parts[k].text;
                 } else {
                     grouped.push(current);
-                    current = { text: parts[k].text, type: parts[k].type };
+                    current = {
+                        text: parts[k].text,
+                        type: parts[k].type,
+                    } as DiffWord;
                 }
             }
             grouped.push(current);
@@ -167,7 +275,7 @@ const GameTextComparator: React.FC = () => {
         return result;
     };
 
-    // Tách thành các dòng để so sánh
+    // Compute line diffs + tag diffs
     const { diffResult, changedLines } = useMemo((): {
         diffResult: LineDiff[];
         changedLines: ChangedLine[];
@@ -177,12 +285,13 @@ const GameTextComparator: React.FC = () => {
 
         const maxLength = Math.max(origLines.length, transLines.length);
         const result: LineDiff[] = [];
-        const changed: ChangedLine[] = [];
+        const tagChanged: ChangedLine[] = [];
 
         for (let i = 0; i < maxLength; i++) {
             const origLine = origLines[i] ?? "";
             const transLine = transLines[i] ?? "";
 
+            // text-level status (kept for main display coloring of Original/Translated panes)
             let status: DiffStatus = "same";
             if (origLine && !transLine) {
                 status = "removed";
@@ -192,11 +301,20 @@ const GameTextComparator: React.FC = () => {
                 status = "modified";
             }
 
+            // Tag comparison (the new important part)
+            const tagsOrig = extractTags(origLine);
+            const tagsTrans = extractTags(transLine);
+            const tagReport = compareTags(tagsOrig, tagsTrans);
+            const hasTagDiff = !!tagReport;
+
+            // If tag diff exists, override status in QuickNav semantics.
             const lineData: LineDiff = {
                 lineNumber: i + 1,
                 original: origLine,
                 translated: transLine,
                 status,
+                tagDiff: hasTagDiff,
+                tagReport: tagReport ?? null,
                 wordDiff:
                     status === "modified"
                         ? getImprovedDiff(origLine, transLine)
@@ -205,47 +323,68 @@ const GameTextComparator: React.FC = () => {
 
             result.push(lineData);
 
-            if (status !== "same") {
-                changed.push({ lineNumber: i + 1, index: i, status });
+            if (hasTagDiff) {
+                tagChanged.push({
+                    lineNumber: i + 1,
+                    index: i,
+                    status: "tagdiff",
+                    tagReport: tagReport!,
+                });
             }
         }
 
-        return { diffResult: result, changedLines: changed };
+        return { diffResult: result, changedLines: tagChanged };
     }, [originalText, translatedText]);
 
+    /** Style per line in the two main panes.
+     *  We keep the existing coloring for text diffs BUT overlay purple highlight if tagDiff.
+     *  When tagDiff === true, we force purple regardless of status, unless selected.
+     */
     const getLineStyle = (
         status: DiffStatus,
-        isSelected = false
+        isSelected = false,
+        isTagDiff = false,
+        isTranslatedPane = false
     ): React.CSSProperties => {
+        // base style from prior version
         let baseStyle: React.CSSProperties = {};
 
-        switch (status) {
-            case "added":
-                baseStyle = {
-                    backgroundColor: "#e6ffed",
-                    borderLeft: "3px solid #52c41a",
-                    color: "#389e0d",
-                };
-                break;
-            case "removed":
-                baseStyle = {
-                    backgroundColor: "#fff2f0",
-                    borderLeft: "3px solid #ff4d4f",
-                    color: "#cf1322",
-                };
-                break;
-            case "modified":
-                baseStyle = {
-                    backgroundColor: "#fffbe6",
-                    borderLeft: "3px solid #faad14",
-                    color: "#d48806",
-                };
-                break;
-            default:
-                baseStyle = {
-                    backgroundColor: "#fafafa",
-                    borderLeft: "3px solid transparent",
-                };
+        if (isTagDiff) {
+            // strong purple flag for dangerous tag mismatch
+            baseStyle = {
+                backgroundColor: "#f9f0ff", // light purple
+                borderLeft: "3px solid #722ed1",
+                color: "#531dab",
+            };
+        } else {
+            switch (status) {
+                case "added":
+                    baseStyle = {
+                        backgroundColor: "#e6ffed",
+                        borderLeft: "3px solid #52c41a",
+                        color: "#389e0d",
+                    };
+                    break;
+                case "removed":
+                    baseStyle = {
+                        backgroundColor: "#fff2f0",
+                        borderLeft: "3px solid #ff4d4f",
+                        color: "#cf1322",
+                    };
+                    break;
+                case "modified":
+                    baseStyle = {
+                        backgroundColor: "#fffbe6",
+                        borderLeft: "3px solid #faad14",
+                        color: "#d48806",
+                    };
+                    break;
+                default:
+                    baseStyle = {
+                        backgroundColor: "#fafafa",
+                        borderLeft: "3px solid transparent",
+                    };
+            }
         }
 
         if (isSelected) {
@@ -255,6 +394,13 @@ const GameTextComparator: React.FC = () => {
                 color: "white",
                 borderLeft: "3px solid #0050b3",
             };
+        }
+
+        // Fade visual when a line exists only in the *other* pane (unchanged from your original logic).
+        if (!isTagDiff) {
+            if (status === (isTranslatedPane ? "removed" : "added")) {
+                baseStyle.opacity = 0.3;
+            }
         }
 
         return baseStyle;
@@ -280,6 +426,14 @@ const GameTextComparator: React.FC = () => {
                 return {
                     backgroundColor: "#ffe58f",
                     color: "#d48806",
+                    padding: "1px 2px",
+                    borderRadius: "2px",
+                };
+            case "tagdiff":
+                // Should never show per-char tagdiff; included for completeness.
+                return {
+                    backgroundColor: "#d3adf7",
+                    color: "#531dab",
                     padding: "1px 2px",
                     borderRadius: "2px",
                 };
@@ -320,13 +474,25 @@ const GameTextComparator: React.FC = () => {
         ));
     };
 
+    const renderTagReportTooltip = (report: TagReport | null): string => {
+        if (!report) return "Tags OK";
+        const missing = report.missing.length
+            ? `Thiếu: ${report.missing.join(", ")}`
+            : "";
+        const extra = report.extra.length
+            ? `Thừa: ${report.extra.join(", ")}`
+            : "";
+        if (!missing && !extra) return "Tags OK";
+        return [missing, extra].filter(Boolean).join(" | ");
+    };
+
     return (
         <div style={{ padding: "20px", maxWidth: "1400px", margin: "0 auto" }}>
             <Title
                 level={2}
                 style={{ textAlign: "center", marginBottom: "30px" }}
             >
-                Game Text Comparator (Character-Level Diff)
+                Game Text Comparator (Tag-Safe)
             </Title>
 
             <Space
@@ -387,6 +553,7 @@ const GameTextComparator: React.FC = () => {
             {/* Diff view */}
             {(originalText || translatedText) && (
                 <Row gutter={16}>
+                    {/* Original Pane */}
                     <Col span={12}>
                         <div
                             style={{ marginBottom: "8px", fontWeight: "bold" }}
@@ -414,7 +581,9 @@ const GameTextComparator: React.FC = () => {
                                             line.status === "added"
                                                 ? "same"
                                                 : line.status,
-                                            selectedLine === index
+                                            selectedLine === index,
+                                            line.tagDiff,
+                                            false
                                         ),
                                         padding: "4px 8px",
                                         fontFamily: "monospace",
@@ -423,8 +592,6 @@ const GameTextComparator: React.FC = () => {
                                         minHeight: "24px",
                                         display: "flex",
                                         alignItems: "center",
-                                        opacity:
-                                            line.status === "added" ? 0.3 : 1,
                                         cursor: "pointer",
                                         transition: "all 0.2s ease",
                                     }}
@@ -472,6 +639,7 @@ const GameTextComparator: React.FC = () => {
                         </div>
                     </Col>
 
+                    {/* Translated Pane */}
                     <Col span={12}>
                         <div
                             style={{ marginBottom: "8px", fontWeight: "bold" }}
@@ -499,7 +667,9 @@ const GameTextComparator: React.FC = () => {
                                             line.status === "removed"
                                                 ? "same"
                                                 : line.status,
-                                            selectedLine === index
+                                            selectedLine === index,
+                                            line.tagDiff,
+                                            true
                                         ),
                                         padding: "4px 8px",
                                         fontFamily: "monospace",
@@ -508,8 +678,6 @@ const GameTextComparator: React.FC = () => {
                                         minHeight: "24px",
                                         display: "flex",
                                         alignItems: "center",
-                                        opacity:
-                                            line.status === "removed" ? 0.3 : 1,
                                         cursor: "pointer",
                                         transition: "all 0.2s ease",
                                     }}
@@ -560,41 +728,43 @@ const GameTextComparator: React.FC = () => {
                 </Row>
             )}
 
-            {/* Quick Navigation */}
+            {/* Quick Navigation - now ONLY tag-diff lines */}
             {changedLines.length > 0 && (
                 <div
                     style={{
                         marginTop: "20px",
                         marginBottom: "20px",
                         padding: "10px",
-                        backgroundColor: "#f6ffed",
+                        backgroundColor: "#f0e7ff",
                         borderRadius: "6px",
-                        border: "1px solid #b7eb8f",
+                        border: "1px solid #d3adf7",
                     }}
                 >
                     <strong>
-                        Quick Navigation ({changedLines.length} differences):
+                        Quick Navigation (⚠ Tag mismatches:{" "}
+                        {changedLines.length}):
                     </strong>
                     <div style={{ marginTop: "8px" }}>
                         {changedLines.map((line, index) => (
-                            <Button
+                            <Tooltip
                                 key={index}
-                                size="small"
-                                type={
-                                    line.status === "modified"
-                                        ? "primary"
-                                        : "default"
-                                }
-                                danger={line.status === "removed"}
-                                style={{
-                                    marginRight: "4px",
-                                    marginBottom: "4px",
-                                }}
-                                onClick={() => scrollToLine(line.index)}
-                                icon={<EyeOutlined />}
+                                title={renderTagReportTooltip(line.tagReport)}
                             >
-                                Line {line.lineNumber}
-                            </Button>
+                                <Button
+                                    size="small"
+                                    style={{
+                                        marginRight: "4px",
+                                        marginBottom: "4px",
+                                        backgroundColor: "#722ed1",
+                                        borderColor: "#722ed1",
+                                        color: "#fff",
+                                    }}
+                                    onClick={() => scrollToLine(line.index)}
+                                    icon={<EyeOutlined />}
+                                >
+                                    Line {line.lineNumber}
+                                </Button>
+                            </Tooltip>
                         ))}
                     </div>
                 </div>
@@ -612,14 +782,17 @@ const GameTextComparator: React.FC = () => {
                     }}
                 >
                     <strong>Legend:</strong>
+                    <span style={{ color: "#722ed1", marginLeft: "10px" }}>
+                        ● Tag mismatch (PURPLE)
+                    </span>
                     <span style={{ color: "#52c41a", marginLeft: "10px" }}>
-                        ● Added
+                        ● Added (text only)
                     </span>
                     <span style={{ color: "#ff4d4f", marginLeft: "10px" }}>
-                        ● Removed
+                        ● Removed (text only)
                     </span>
                     <span style={{ color: "#faad14", marginLeft: "10px" }}>
-                        ● Modified
+                        ● Modified (text only)
                     </span>
                     <span style={{ color: "#8c8c8c", marginLeft: "10px" }}>
                         ● Same
@@ -628,8 +801,8 @@ const GameTextComparator: React.FC = () => {
                         ● Selected
                     </span>
                     <div style={{ marginTop: "5px" }}>
-                        💡 <strong>Tips:</strong> Now with character-level
-                        precision! Only changed characters are highlighted.
+                        💡 <strong>Tip:</strong> Chỉ những dòng sai tag mới hiện
+                        ở Quick Navigation. Dịch sai tag có thể làm crash game!
                     </div>
                 </div>
             )}
