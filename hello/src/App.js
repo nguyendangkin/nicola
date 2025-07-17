@@ -5,6 +5,24 @@ const GameTranslationChecker = () => {
     const [translatedText, setTranslatedText] = useState("");
     const [comparisonResult, setComparisonResult] = useState(null);
 
+    // Xử lý khi file được thả vào textarea
+    const handleDrop = (e, setText) => {
+        e.preventDefault();
+        const file = e.dataTransfer.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                setText(event.target.result);
+            };
+            reader.readAsText(file);
+        }
+    };
+
+    // Ngăn chặn hành vi mặc định khi kéo file vào
+    const handleDragOver = (e) => {
+        e.preventDefault();
+    };
+
     const parseGameFile = (content) => {
         const lines = content.split("\n");
         const entries = [];
@@ -173,30 +191,42 @@ const GameTranslationChecker = () => {
             </p>
 
             <div style={{ display: "flex", gap: "20px", marginBottom: "20px" }}>
-                <div style={{ flex: 1 }}>
+                <div
+                    style={{ flex: 1 }}
+                    onDrop={(e) => handleDrop(e, setOriginalText)}
+                    onDragOver={handleDragOver}
+                >
                     <h3>File Gốc:</h3>
                     <textarea
                         value={originalText}
                         onChange={(e) => setOriginalText(e.target.value)}
-                        placeholder="Paste file gốc vào đây..."
+                        placeholder="Paste file gốc vào đây hoặc kéo thả file..."
                         style={{
                             width: "100%",
                             height: "400px",
                             fontFamily: "monospace",
+                            border: "2px dashed #ccc",
+                            padding: "10px",
                         }}
                     />
                 </div>
 
-                <div style={{ flex: 1 }}>
+                <div
+                    style={{ flex: 1 }}
+                    onDrop={(e) => handleDrop(e, setTranslatedText)}
+                    onDragOver={handleDragOver}
+                >
                     <h3>Bản Dịch:</h3>
                     <textarea
                         value={translatedText}
                         onChange={(e) => setTranslatedText(e.target.value)}
-                        placeholder="Paste bản dịch vào đây..."
+                        placeholder="Paste bản dịch vào đây hoặc kéo thả file..."
                         style={{
                             width: "100%",
                             height: "400px",
                             fontFamily: "monospace",
+                            border: "2px dashed #ccc",
+                            padding: "10px",
                         }}
                     />
                 </div>
@@ -266,7 +296,7 @@ const GameTranslationChecker = () => {
                                                     backgroundColor: "#ffebee",
                                                     padding: "10px",
                                                     margin: "5px 0",
-                                                    border: "1px solid #red",
+                                                    border: "1px solid red",
                                                 }}
                                             >
                                                 <strong>{issue.selfId}:</strong>{" "}
@@ -298,7 +328,7 @@ const GameTranslationChecker = () => {
                                                             "#e8f5e8",
                                                         padding: "10px",
                                                         margin: "5px 0",
-                                                        border: "1px solid #green",
+                                                        border: "1px solid green",
                                                     }}
                                                 >
                                                     <strong>
