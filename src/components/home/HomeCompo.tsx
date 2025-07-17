@@ -65,9 +65,15 @@ const SQUARE_RE = /\[[^\]]*\]/g;
 
 /** Extract tag-like tokens from a line of text. */
 function extractTags(line: string): ExtractedTags {
-    const angle = line.match(ANGLE_RE) ?? [];
-    const curly = line.match(CURLY_RE) ?? [];
-    const square = line.match(SQUARE_RE) ?? [];
+    const angle = (line.match(/<[^>]+>/g) ?? []).map((tag) =>
+        tag.replace(/\(.*?\)/g, "")
+    );
+    const curly = (line.match(/\{[^}]+}/g) ?? []).map((tag) =>
+        tag.replace(/\(.*?\)/g, "")
+    );
+    const square = (line.match(/\[[^\]]+\]/g) ?? []).map((tag) =>
+        tag.replace(/\(.*?\)/g, "")
+    );
     return { angle, curly, square };
 }
 
@@ -118,11 +124,11 @@ function compareTokenSets(orig: string[], trans: string[]): TagReport | null {
 }
 
 /** Compare all 3 tag classes together. */
+
 function compareTags(
     orig: ExtractedTags,
     trans: ExtractedTags
 ): TagReport | null {
-    // merge results from each token class
     const repA = compareTokenSets(orig.angle, trans.angle);
     const repC = compareTokenSets(orig.curly, trans.curly);
     const repS = compareTokenSets(orig.square, trans.square);
@@ -142,7 +148,6 @@ function compareTags(
     if (!missing.length && !extra.length) return null;
     return { missing, extra, mismatchCounts };
 }
-
 /* --------------- Component --------------- */
 
 const GameTextComparator: React.FC = () => {
