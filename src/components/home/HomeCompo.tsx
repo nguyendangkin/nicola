@@ -63,31 +63,105 @@ const GameTextComparator: React.FC = () => {
         setCopiedLine("");
     };
 
-    // Word-level diff
-    const getWordDiff = (original: string, translated: string): WordDiff => {
-        const origWords = original.split(/(\s+)/);
-        const transWords = translated.split(/(\s+)/);
+    // Improved character-level diff with word boundaries
+    const getImprovedDiff = (
+        str1: string,
+        str2: string
+    ): { original: DiffWord[]; translated: DiffWord[] } => {
+        // Convert strings to arrays of characters
+        const chars1 = [...str1];
+        const chars2 = [...str2];
 
-        const maxLength = Math.max(origWords.length, transWords.length);
-        const result: WordDiff = { original: [], translated: [] };
+        // Simple LCS-based diff algorithm
+        const lcs = (a: string[], b: string[]): number[][] => {
+            const m = a.length;
+            const n = b.length;
+            const dp: number[][] = Array(m + 1)
+                .fill(null)
+                .map(() => Array(n + 1).fill(0));
 
-        for (let i = 0; i < maxLength; i++) {
-            const origWord = origWords[i] ?? "";
-            const transWord = transWords[i] ?? "";
-
-            if (origWord === transWord) {
-                result.original.push({ text: origWord, type: "same" });
-                result.translated.push({ text: transWord, type: "same" });
-            } else if (origWord && !transWord) {
-                result.original.push({ text: origWord, type: "removed" });
-                result.translated.push({ text: "", type: "removed" });
-            } else if (!origWord && transWord) {
-                result.original.push({ text: "", type: "added" });
-                result.translated.push({ text: transWord, type: "added" });
-            } else {
-                result.original.push({ text: origWord, type: "modified" });
-                result.translated.push({ text: transWord, type: "modified" });
+            for (let i = 1; i <= m; i++) {
+                for (let j = 1; j <= n; j++) {
+                    if (a[i - 1] === b[j - 1]) {
+                        dp[i][j] = dp[i - 1][j - 1] + 1;
+                    } else {
+                        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+                    }
+                }
             }
+            return dp;
+        };
+
+        const dp = lcs(chars1, chars2);
+        const result: { original: DiffWord[]; translated: DiffWord[] } = {
+            original: [],
+            translated: [],
+        };
+
+        let i = chars1.length;
+        let j = chars2.length;
+
+        const originalParts: { text: string; type: DiffStatus }[] = [];
+        const translatedParts: { text: string; type: DiffStatus }[] = [];
+
+        while (i > 0 || j > 0) {
+            if (i > 0 && j > 0 && chars1[i - 1] === chars2[j - 1]) {
+                originalParts.unshift({ text: chars1[i - 1], type: "same" });
+                translatedParts.unshift({ text: chars2[j - 1], type: "same" });
+                i--;
+                j--;
+            } else if (i > 0 && (j === 0 || dp[i - 1][j] >= dp[i][j - 1])) {
+                originalParts.unshift({ text: chars1[i - 1], type: "removed" });
+                i--;
+            } else if (j > 0) {
+                translatedParts.unshift({ text: chars2[j - 1], type: "added" });
+                j--;
+            }
+        }
+
+        // Group consecutive characters of the same type
+        const groupParts = (
+            parts: { text: string; type: DiffStatus }[]
+        ): DiffWord[] => {
+            if (parts.length === 0) return [];
+
+            const grouped: DiffWord[] = [];
+            let current = { text: parts[0].text, type: parts[0].type };
+
+            for (let k = 1; k < parts.length; k++) {
+                if (parts[k].type === current.type) {
+                    current.text += parts[k].text;
+                } else {
+                    grouped.push(current);
+                    current = { text: parts[k].text, type: parts[k].type };
+                }
+            }
+            grouped.push(current);
+            return grouped;
+        };
+
+        // Fill gaps for alignment
+        const originalGrouped = groupParts(originalParts);
+        const translatedGrouped = groupParts(translatedParts);
+
+        // Create balanced arrays
+        const maxLength = Math.max(
+            originalGrouped.length,
+            translatedGrouped.length
+        );
+
+        for (let k = 0; k < maxLength; k++) {
+            const origPart = originalGrouped[k] || {
+                text: "",
+                type: "same" as DiffStatus,
+            };
+            const transPart = translatedGrouped[k] || {
+                text: "",
+                type: "same" as DiffStatus,
+            };
+
+            result.original.push(origPart);
+            result.translated.push(transPart);
         }
 
         return result;
@@ -125,7 +199,7 @@ const GameTextComparator: React.FC = () => {
                 status,
                 wordDiff:
                     status === "modified"
-                        ? getWordDiff(origLine, transLine)
+                        ? getImprovedDiff(origLine, transLine)
                         : null,
             };
 
@@ -192,22 +266,22 @@ const GameTextComparator: React.FC = () => {
                 return {
                     backgroundColor: "#b7eb8f",
                     color: "#389e0d",
-                    padding: "2px 4px",
-                    borderRadius: "3px",
+                    padding: "1px 2px",
+                    borderRadius: "2px",
                 };
             case "removed":
                 return {
                     backgroundColor: "#ffaaa0",
                     color: "#cf1322",
-                    padding: "2px 4px",
-                    borderRadius: "3px",
+                    padding: "1px 2px",
+                    borderRadius: "2px",
                 };
             case "modified":
                 return {
                     backgroundColor: "#ffe58f",
                     color: "#d48806",
-                    padding: "2px 4px",
-                    borderRadius: "3px",
+                    padding: "1px 2px",
+                    borderRadius: "2px",
                 };
             default:
                 return {};
@@ -235,7 +309,6 @@ const GameTextComparator: React.FC = () => {
         const lines = translatedText.split("\n");
         lines[lineIndex] = copiedLine;
         setTranslatedText(lines.join("\n"));
-        // Nếu muốn dán nhiều lần, comment dòng dưới:
         setCopiedLine("");
     };
 
@@ -253,7 +326,7 @@ const GameTextComparator: React.FC = () => {
                 level={2}
                 style={{ textAlign: "center", marginBottom: "30px" }}
             >
-                Game Text Comparator
+                Game Text Comparator (Character-Level Diff)
             </Title>
 
             <Space
@@ -318,7 +391,7 @@ const GameTextComparator: React.FC = () => {
                         <div
                             style={{ marginBottom: "8px", fontWeight: "bold" }}
                         >
-                            Original (Diff View):
+                            Original (Character-Level Diff):
                         </div>
                         <div
                             ref={originalRef}
@@ -403,7 +476,7 @@ const GameTextComparator: React.FC = () => {
                         <div
                             style={{ marginBottom: "8px", fontWeight: "bold" }}
                         >
-                            Translated (Diff View):
+                            Translated (Character-Level Diff):
                         </div>
                         <div
                             ref={translatedRef}
@@ -555,9 +628,8 @@ const GameTextComparator: React.FC = () => {
                         ● Selected
                     </span>
                     <div style={{ marginTop: "5px" }}>
-                        💡 <strong>Tips:</strong> Click line numbers to jump •
-                        Copy from original • Paste to translated • Word-level
-                        highlighting
+                        💡 <strong>Tips:</strong> Now with character-level
+                        precision! Only changed characters are highlighted.
                     </div>
                 </div>
             )}
