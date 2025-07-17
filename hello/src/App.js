@@ -1,28 +1,14 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 
 const GameTranslationChecker = () => {
     const [originalText, setOriginalText] = useState("");
     const [translatedText, setTranslatedText] = useState("");
     const [comparisonResult, setComparisonResult] = useState(null);
 
-    // Xử lý khi file được thả vào textarea
-    const handleDrop = (e, setText) => {
-        e.preventDefault();
-        const file = e.dataTransfer.files[0];
-        if (file) {
-            const reader = new FileReader();
-            reader.onload = (event) => {
-                setText(event.target.result);
-            };
-            reader.readAsText(file);
-        }
-    };
+    const originalRef = useRef(null);
+    const translatedRef = useRef(null);
 
-    // Ngăn chặn hành vi mặc định khi kéo file vào
-    const handleDragOver = (e) => {
-        e.preventDefault();
-    };
-
+    // Hàm parse file game
     const parseGameFile = (content) => {
         const lines = content.split("\n");
         const entries = [];
@@ -54,6 +40,57 @@ const GameTranslationChecker = () => {
         return entries;
     };
 
+    // ✅ Copy text từ bản gốc
+    const handleCopyOriginal = (selfId) => {
+        const originalEntry = parseGameFile(originalText).find(
+            (e) => e.selfId === selfId
+        );
+        if (originalEntry) {
+            navigator.clipboard.writeText(originalEntry.text);
+        }
+    };
+
+    // ✅ Dán text vào bản dịch
+    const handlePasteOverride = (selfId) => {
+        const originalEntry = parseGameFile(originalText).find(
+            (e) => e.selfId === selfId
+        );
+        if (!originalEntry) return;
+
+        const lines = translatedText.split("\n");
+        let foundSelfId = false;
+
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].trim() === `SelfId=${selfId}`) {
+                foundSelfId = true;
+            } else if (foundSelfId && lines[i].trim().startsWith("Text=")) {
+                // Ghi đè text
+                lines[i] = `Text=${originalEntry.text}`;
+                break;
+            }
+        }
+
+        setTranslatedText(lines.join("\n"));
+    };
+
+    // ✅ Xử lý kéo thả file
+    const handleDrop = (e, setText) => {
+        e.preventDefault();
+        const file = e.dataTransfer.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                setText(event.target.result);
+            };
+            reader.readAsText(file);
+        }
+    };
+
+    const handleDragOver = (e) => {
+        e.preventDefault();
+    };
+
+    // ✅ So sánh file
     const compareFiles = () => {
         try {
             const originalEntries = parseGameFile(originalText);
@@ -198,6 +235,7 @@ const GameTranslationChecker = () => {
                 >
                     <h3>File Gốc:</h3>
                     <textarea
+                        ref={originalRef}
                         value={originalText}
                         onChange={(e) => setOriginalText(e.target.value)}
                         placeholder="Paste file gốc vào đây hoặc kéo thả file..."
@@ -218,6 +256,7 @@ const GameTranslationChecker = () => {
                 >
                     <h3>Bản Dịch:</h3>
                     <textarea
+                        ref={translatedRef}
                         value={translatedText}
                         onChange={(e) => setTranslatedText(e.target.value)}
                         placeholder="Paste bản dịch vào đây hoặc kéo thả file..."
@@ -301,119 +340,45 @@ const GameTranslationChecker = () => {
                                             >
                                                 <strong>{issue.selfId}:</strong>{" "}
                                                 {issue.message}
+                                                <div
+                                                    style={{
+                                                        marginTop: "5px",
+                                                        display: "flex",
+                                                        gap: "10px",
+                                                    }}
+                                                >
+                                                    <button
+                                                        onClick={() =>
+                                                            handleCopyOriginal(
+                                                                issue.selfId
+                                                            )
+                                                        }
+                                                        style={{
+                                                            padding: "5px 10px",
+                                                            cursor: "pointer",
+                                                        }}
+                                                    >
+                                                        📋 Copy Gốc
+                                                    </button>
+                                                    <button
+                                                        onClick={() =>
+                                                            handlePasteOverride(
+                                                                issue.selfId
+                                                            )
+                                                        }
+                                                        style={{
+                                                            padding: "5px 10px",
+                                                            cursor: "pointer",
+                                                            backgroundColor:
+                                                                "#e3f2fd",
+                                                        }}
+                                                    >
+                                                        ⬆ Dán vào Dịch
+                                                    </button>
+                                                </div>
                                             </div>
                                         )
                                     )}
-                                </div>
-                            )}
-
-                            {comparisonResult.changes.length > 0 && (
-                                <div>
-                                    <h3 style={{ color: "green" }}>
-                                        ✅ Thay Đổi Text (Dịch thuật) (
-                                        {comparisonResult.changes.length}):
-                                    </h3>
-                                    <div
-                                        style={{
-                                            maxHeight: "400px",
-                                            overflowY: "auto",
-                                        }}
-                                    >
-                                        {comparisonResult.changes.map(
-                                            (change, index) => (
-                                                <div
-                                                    key={index}
-                                                    style={{
-                                                        backgroundColor:
-                                                            "#e8f5e8",
-                                                        padding: "10px",
-                                                        margin: "5px 0",
-                                                        border: "1px solid green",
-                                                    }}
-                                                >
-                                                    <strong>
-                                                        {change.selfId}
-                                                    </strong>
-                                                    <div
-                                                        style={{
-                                                            display: "flex",
-                                                            gap: "20px",
-                                                            marginTop: "10px",
-                                                        }}
-                                                    >
-                                                        <div
-                                                            style={{ flex: 1 }}
-                                                        >
-                                                            <div>
-                                                                <strong>
-                                                                    Gốc:
-                                                                </strong>
-                                                            </div>
-                                                            <div
-                                                                style={{
-                                                                    backgroundColor:
-                                                                        "#f5f5f5",
-                                                                    padding:
-                                                                        "5px",
-                                                                    fontFamily:
-                                                                        "monospace",
-                                                                    fontSize:
-                                                                        "12px",
-                                                                }}
-                                                            >
-                                                                {
-                                                                    change.original
-                                                                }
-                                                            </div>
-                                                        </div>
-                                                        <div
-                                                            style={{ flex: 1 }}
-                                                        >
-                                                            <div>
-                                                                <strong>
-                                                                    Dịch:
-                                                                </strong>
-                                                            </div>
-                                                            <div
-                                                                style={{
-                                                                    backgroundColor:
-                                                                        "#e3f2fd",
-                                                                    padding:
-                                                                        "5px",
-                                                                    fontFamily:
-                                                                        "monospace",
-                                                                    fontSize:
-                                                                        "12px",
-                                                                }}
-                                                            >
-                                                                {
-                                                                    change.translated
-                                                                }
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            )
-                                        )}
-                                    </div>
-                                </div>
-                            )}
-
-                            {comparisonResult.issues.length === 0 && (
-                                <div
-                                    style={{
-                                        backgroundColor: "#e8f5e8",
-                                        padding: "15px",
-                                        textAlign: "center",
-                                        color: "green",
-                                    }}
-                                >
-                                    <strong>
-                                        ✅ Không phát hiện vấn đề nào!
-                                    </strong>
-                                    <br />
-                                    Bản dịch an toàn, không thay đổi SelfId hay
-                                    tag hệ thống.
                                 </div>
                             )}
                         </>
