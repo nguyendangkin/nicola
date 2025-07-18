@@ -1,9 +1,0 @@
-2025-07-18 12:41:07,485 - INFO - 🚀 Khởi tạo GameTranslationTool
-2025-07-18 12:41:07,485 - WARNING - ⚠️  Chỉ chạy chế độ check (không có API key hoặc genai)
-2025-07-18 12:41:07,486 - INFO - 🔍 CHẠY CHẾ ĐỘ KIỂM TRA
-2025-07-18 12:41:07,486 - INFO - 🔍 Thư mục gốc: C:\Users\Nguye\Desktop\viethoa
-2025-07-18 12:41:07,486 - INFO - 📂 Thư mục raw: C:\Users\Nguye\Desktop\viethoa\raw_file
-2025-07-18 12:41:07,486 - INFO - 📁 Thư mục translated: C:\Users\Nguye\Desktop\viethoa\tran_vi
-2025-07-18 12:41:07,487 - ERROR - ❌ Không tìm thấy cặp file nào để kiểm tra
-2025-07-18 12:41:07,487 - ERROR -    Cấu trúc mong đợi:
-2025-07-18 12:41:07,487 - ERROR -    C:\Users\Nguye\Desktop\viethoa\raw_file/abc.txt -> C:\Users\Nguye\Desktop\viethoa\tran_vi/abc_vi.txt
