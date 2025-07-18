@@ -21,6 +21,7 @@ except ImportError:
 # ============= CONFIG =============
 API_KEY = "AIzaSyBYzqjodrCgKDPZJyV2xyJaeFOq5SM32vQ"   # 🔑 API key
 MODEL = "gemini-1.5-flash"      # hoặc "gemini-1.5-pro"
+RAW_DIR = "raw_file"            # thư mục chứa file gốc cần dịch
 OUTPUT_DIR = "tran_vi"          # thư mục chứa file dịch
 DELAY = 2                       # thời gian chờ giữa các request
 PROMPT = (
@@ -292,6 +293,10 @@ class GameTranslator:
     
     def find_txt_files(self, directory: Path) -> List[Path]:
         """Tìm tất cả file .txt trong thư mục"""
+        if not directory.exists():
+            self.logger.warning(f"⚠️  Thư mục không tồn tại: {directory}")
+            return []
+        
         txt_files = [f for f in directory.iterdir() if f.suffix == ".txt" and not f.stem.endswith("_vi")]
         return txt_files
     
@@ -320,25 +325,31 @@ class GameTranslator:
             self.logger.error(error_msg)
             return False, error_msg
     
-    def run_translation(self, directory: str = ".", output_dir: str = OUTPUT_DIR, delay: int = DELAY) -> Dict[str, Any]:
+    def run_translation(self, raw_dir: str = RAW_DIR, output_dir: str = OUTPUT_DIR, delay: int = DELAY, working_dir: str = ".") -> Dict[str, Any]:
         """Chạy quá trình dịch toàn bộ"""
-        root = Path(directory).resolve()
+        root = Path(working_dir).resolve()
+        raw_path = root / raw_dir
         out_dir = root / output_dir
+        
+        # Tạo thư mục output nếu chưa có
         out_dir.mkdir(exist_ok=True)
         
-        self.logger.info(f"🔍 Quét thư mục: {root}")
+        self.logger.info(f"🔍 Thư mục gốc: {root}")
+        self.logger.info(f"📂 Thư mục raw: {raw_path}")
         self.logger.info(f"📁 Thư mục đích: {out_dir}")
         
-        # Tìm file .txt
-        txt_files = self.find_txt_files(root)
+        # Tìm file .txt trong thư mục raw
+        txt_files = self.find_txt_files(raw_path)
         if not txt_files:
-            self.logger.warning("❌ Không tìm thấy file .txt nào")
+            self.logger.warning(f"❌ Không tìm thấy file .txt nào trong {raw_path}")
             return {
                 'success': False,
                 'total_files': 0,
                 'translated_files': 0,
                 'failed_files': 0,
-                'translated_pairs': []
+                'translated_pairs': [],
+                'raw_dir': str(raw_path),
+                'output_dir': str(out_dir)
             }
         
         self.logger.info(f"📋 Tìm thấy {len(txt_files)} file cần dịch")
@@ -374,7 +385,9 @@ class GameTranslator:
             'total_files': total_files,
             'translated_files': translated_files,
             'failed_files': failed_files,
-            'translated_pairs': translated_pairs
+            'translated_pairs': translated_pairs,
+            'raw_dir': str(raw_path),
+            'output_dir': str(out_dir)
         }
 
 
@@ -414,31 +427,34 @@ class GameTranslationTool:
         self.logger = logging.getLogger(__name__)
         self.logger.info("🚀 Khởi tạo GameTranslationTool")
     
-    def translate_and_check(self, directory: str = ".", output_dir: str = OUTPUT_DIR, delay: int = DELAY) -> bool:
+    def translate_and_check(self, working_dir: str = ".", raw_dir: str = RAW_DIR, output_dir: str = OUTPUT_DIR, delay: int = DELAY) -> bool:
         """Dịch và kiểm tra tự động"""
         self.logger.info("🎯 BẮT ĐẦU QUY TRÌNH DỊCH + KIỂM TRA")
         
         # Bước 1: Dịch
         if self.translator:
             self.logger.info("📝 BƯỚC 1: DỊCH CÁC FILE")
-            translation_result = self.translator.run_translation(directory, output_dir, delay)
+            translation_result = self.translator.run_translation(raw_dir, output_dir, delay, working_dir)
             
             if not translation_result['success']:
                 self.logger.error("❌ Quá trình dịch thất bại")
                 return False
             
             translated_pairs = translation_result['translated_pairs']
+            raw_path = Path(translation_result['raw_dir'])
+            out_path = Path(translation_result['output_dir'])
         else:
             self.logger.info("⚠️  Bỏ qua bước dịch - chỉ chạy kiểm tra")
             # Tìm các cặp file có sẵn
-            root = Path(directory).resolve()
-            out_dir = root / output_dir
+            root = Path(working_dir).resolve()
+            raw_path = root / raw_dir
+            out_path = root / output_dir
             translated_pairs = []
             
-            for original_file in root.glob("*.txt"):
+            for original_file in raw_path.glob("*.txt"):
                 if original_file.stem.endswith("_vi"):
                     continue
-                translated_file = out_dir / (original_file.stem + "_vi.txt")
+                translated_file = out_path / (original_file.stem + "_vi.txt")
                 if translated_file.exists():
                     translated_pairs.append((original_file, translated_file))
         
@@ -449,6 +465,8 @@ class GameTranslationTool:
         # Bước 2: Kiểm tra
         self.logger.info("🔍 BƯỚC 2: KIỂM TRA CHẤT LƯỢNG")
         self.logger.info(f"📋 Kiểm tra {len(translated_pairs)} cặp file")
+        self.logger.info(f"📂 Raw: {raw_path}")
+        self.logger.info(f"📁 Translated: {out_path}")
         
         all_ok = True
         for original_file, translated_file in translated_pairs:
@@ -480,24 +498,31 @@ class GameTranslationTool:
         
         return all_ok
     
-    def check_only(self, directory: str = ".", output_dir: str = OUTPUT_DIR) -> bool:
+    def check_only(self, working_dir: str = ".", raw_dir: str = RAW_DIR, output_dir: str = OUTPUT_DIR) -> bool:
         """Chỉ chạy kiểm tra (không dịch)"""
         self.logger.info("🔍 CHẠY CHẾ ĐỘ KIỂM TRA")
         
-        root = Path(directory).resolve()
-        out_dir = root / output_dir
+        root = Path(working_dir).resolve()
+        raw_path = root / raw_dir
+        out_path = root / output_dir
+        
+        self.logger.info(f"🔍 Thư mục gốc: {root}")
+        self.logger.info(f"📂 Thư mục raw: {raw_path}")
+        self.logger.info(f"📁 Thư mục translated: {out_path}")
         
         # Tìm các cặp file
         pairs = []
-        for original_file in root.glob("*.txt"):
+        for original_file in raw_path.glob("*.txt"):
             if original_file.stem.endswith("_vi"):
                 continue
-            translated_file = out_dir / (original_file.stem + "_vi.txt")
+            translated_file = out_path / (original_file.stem + "_vi.txt")
             if translated_file.exists():
                 pairs.append((original_file, translated_file))
         
         if not pairs:
-            self.logger.error("❌ Không tìm thấy cặp file nào để kiểm tra")
+            self.logger.error(f"❌ Không tìm thấy cặp file nào để kiểm tra")
+            self.logger.error(f"   Cấu trúc mong đợi:")
+            self.logger.error(f"   {raw_path}/abc.txt -> {out_path}/abc_vi.txt")
             return False
         
         self.logger.info(f"📋 Tìm thấy {len(pairs)} cặp file")
@@ -535,17 +560,32 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Cách sử dụng:
-  python game_translation.py                     # Dịch + kiểm tra thư mục hiện tại
-  python game_translation.py --check-only       # Chỉ kiểm tra (không dịch)
-  python game_translation.py -d /path/to/dir    # Dịch + kiểm tra thư mục cụ thể
-  python game_translation.py -k YOUR_API_KEY    # Sử dụng API key từ command line
-  python game_translation.py --delay 3          # Đặt delay 3 giây giữa các request
+  python game_translation.py                     # Dịch + kiểm tra (raw_file -> tran_vi)
+  python game_translation.py --check-only       # Chỉ kiểm tra (raw_file <-> tran_vi)
+  python game_translation.py -d /path/to/dir    # Thư mục làm việc khác
+  python game_translation.py -r input_files     # Thư mục raw khác
+  python game_translation.py -o output_files    # Thư mục output khác
+  python game_translation.py -k YOUR_API_KEY    # API key từ command line
+  python game_translation.py --delay 3          # Delay 3 giây giữa các request
+
+Cấu trúc thư mục:
+  working_dir/
+  ├── raw_file/           # File gốc cần dịch
+  │   ├── abc.txt
+  │   └── def.txt
+  ├── tran_vi/            # File dịch (tự động tạo)
+  │   ├── abc_vi.txt
+  │   └── def_vi.txt
+  └── game_translation.py
         """
     )
     
     parser.add_argument('-d', '--directory', 
                        default='.',
-                       help='Thư mục chứa các file cần dịch (mặc định: thư mục hiện tại)')
+                       help='Thư mục làm việc chính (mặc định: thư mục hiện tại)')
+    parser.add_argument('-r', '--raw-dir', 
+                       default=RAW_DIR,
+                       help=f'Thư mục chứa file gốc (mặc định: {RAW_DIR})')
     parser.add_argument('-o', '--output', 
                        default=OUTPUT_DIR,
                        help=f'Thư mục đích (mặc định: {OUTPUT_DIR})')
@@ -573,9 +613,9 @@ Cách sử dụng:
     
     try:
         if args.check_only:
-            success = tool.check_only(args.directory, args.output)
+            success = tool.check_only(args.directory, args.raw_dir, args.output)
         else:
-            success = tool.translate_and_check(args.directory, args.output, args.delay)
+            success = tool.translate_and_check(args.directory, args.raw_dir, args.output, args.delay)
         
         sys.exit(0 if success else 1)
         
