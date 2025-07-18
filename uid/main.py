@@ -1,58 +1,591 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import os
+import re
+import sys
 import time
-import google.generativeai as genai
+import argparse
+import logging
+from datetime import datetime
 from pathlib import Path
+from typing import List, Tuple, Dict, Any
+
+try:
+    import google.generativeai as genai
+    GENAI_AVAILABLE = True
+except ImportError:
+    GENAI_AVAILABLE = False
+    print("⚠️  google.generativeai không được cài đặt. Chỉ chạy chế độ check.")
 
 # ============= CONFIG =============
-API_KEY = ""   # 🔑 Dán API key của bạn vào đây
-MODEL = "gemini-1.5-flash"      # hoặc "gemini-1.5-pro" nếu cần chất lượng cao
+API_KEY = "AIzaSyBYzqjodrCgKDPZJyV2xyJaeFOq5SM32vQ"   # 🔑 API key
+MODEL = "gemini-1.5-flash"      # hoặc "gemini-1.5-pro"
 OUTPUT_DIR = "tran_vi"          # thư mục chứa file dịch
 DELAY = 2                       # thời gian chờ giữa các request
 PROMPT = (
     "Việt hóa phần Text của file script này sang tiếng việt. "
-    "Giữ nguyên cấu trúc file."
+    "Giữ nguyên cấu trúc file. "
     "Chỉ trả về văn bản dịch, không thêm giải thích."
 )
 # ===================================
 
-# Cấu hình Gemini
-genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel(MODEL)
+class GameTranslationChecker:
+    """Tool kiểm tra chất lượng bản dịch"""
+    
+    def __init__(self):
+        self.total_files = 0
+        self.ok_files = 0
+        self.error_files = 0
+        self.issues_found = []
+        
+    def parse_game_file(self, content):
+        """Parse game file content - giống hệt logic JavaScript"""
+        lines = content.split('\n')
+        entries = []
+        
+        for i in range(len(lines)):
+            line = lines[i].strip()
+            if line.startswith('SelfId='):
+                self_id = line[7:]  # substring(7)
+                text_line = ""
+                
+                for j in range(i + 1, len(lines)):
+                    if lines[j].strip().startswith('Text='):
+                        text_line = lines[j].strip()[5:]  # substring(5)
+                        break
+                    if lines[j].strip().startswith('SelfId='):
+                        break
+                
+                entries.append({
+                    'selfId': self_id,
+                    'text': text_line,
+                    'lineNumber': i + 1
+                })
+        
+        return entries
+    
+    def compare_files(self, original_content, translated_content):
+        """So sánh 2 file content"""
+        try:
+            original_entries = self.parse_game_file(original_content)
+            translated_entries = self.parse_game_file(translated_content)
+            
+            issues = []
+            changes = []
+            
+            original_ids = set(e['selfId'] for e in original_entries)
+            translated_ids = set(e['selfId'] for e in translated_entries)
+            
+            # Find missing SelfIds
+            for id in original_ids:
+                if id not in translated_ids:
+                    issues.append({
+                        'type': 'missing',
+                        'selfId': id,
+                        'message': f'SelfId "{id}" bị thiếu trong bản dịch'
+                    })
+            
+            # Find extra SelfIds
+            for id in translated_ids:
+                if id not in original_ids:
+                    issues.append({
+                        'type': 'extra',
+                        'selfId': id,
+                        'message': f'SelfId "{id}" được thêm vào bản dịch (không có trong gốc)'
+                    })
+            
+            # Compare existing entries
+            original_map = {e['selfId']: e for e in original_entries}
+            translated_map = {e['selfId']: e for e in translated_entries}
+            
+            for id, original_entry in original_map.items():
+                translated_entry = translated_map.get(id)
+                if translated_entry:
+                    # Check if SelfId was modified
+                    if original_entry['selfId'] != translated_entry['selfId']:
+                        issues.append({
+                            'type': 'modified_id',
+                            'selfId': id,
+                            'message': f'SelfId bị thay đổi từ "{original_entry["selfId"]}" thành "{translated_entry["selfId"]}"'
+                        })
+                    
+                    # Check for text changes
+                    if original_entry['text'] != translated_entry['text']:
+                        changes.append({
+                            'selfId': id,
+                            'original': original_entry['text'],
+                            'translated': translated_entry['text']
+                        })
+                    
+                    # Check for tag modifications
+                    original_tags = re.findall(r'<[^>]+>', original_entry['text'])
+                    translated_tags = re.findall(r'<[^>]+>', translated_entry['text'])
+                    original_special_tags = re.findall(r'\{[^}]+\}', original_entry['text'])
+                    translated_special_tags = re.findall(r'\{[^}]+\}', translated_entry['text'])
+                    
+                    if len(original_tags) != len(translated_tags):
+                        issues.append({
+                            'type': 'tag_count',
+                            'selfId': id,
+                            'message': f'Số lượng tag HTML thay đổi: {len(original_tags)} → {len(translated_tags)}'
+                        })
+                    
+                    if len(original_special_tags) != len(translated_special_tags):
+                        issues.append({
+                            'type': 'special_tag_count',
+                            'selfId': id,
+                            'message': f'Số lượng special tag thay đổi: {len(original_special_tags)} → {len(translated_special_tags)}'
+                        })
+                    
+                    game_tags_original = re.findall(r'<(KEY_WAIT|NO_INPUT|cf)>', original_entry['text'])
+                    game_tags_translated = re.findall(r'<(KEY_WAIT|NO_INPUT|cf)>', translated_entry['text'])
+                    
+                    if len(game_tags_original) != len(game_tags_translated):
+                        issues.append({
+                            'type': 'game_tag',
+                            'selfId': id,
+                            'message': f'Game tag bị thay đổi: {", ".join([f"<{tag}>" for tag in game_tags_original])}'
+                        })
+            
+            return {
+                'issues': issues,
+                'changes': changes,
+                'totalOriginal': len(original_entries),
+                'totalTranslated': len(translated_entries)
+            }
+            
+        except Exception as error:
+            return {
+                'error': f'Lỗi: {str(error)}',
+                'issues': [],
+                'changes': []
+            }
+    
+    def check_file_pair(self, original_file, translated_file):
+        """Check một cặp file"""
+        try:
+            # Đọc file gốc
+            with open(original_file, 'r', encoding='utf-8') as f:
+                original_content = f.read()
+            
+            # Đọc file dịch
+            with open(translated_file, 'r', encoding='utf-8') as f:
+                translated_content = f.read()
+            
+            # So sánh
+            result = self.compare_files(original_content, translated_content)
+            
+            self.total_files += 1
+            
+            if 'error' in result:
+                self.error_files += 1
+                self.issues_found.append({
+                    'file': original_file.name,
+                    'type': 'error',
+                    'message': result['error']
+                })
+                return False, result['error']
+            
+            if len(result['issues']) > 0:
+                self.error_files += 1
+                self.issues_found.append({
+                    'file': original_file.name,
+                    'type': 'issues',
+                    'issues': result['issues'],
+                    'changes': result['changes'],
+                    'totalOriginal': result['totalOriginal'],
+                    'totalTranslated': result['totalTranslated']
+                })
+                return False, f"{len(result['issues'])} vấn đề tìm thấy"
+            else:
+                self.ok_files += 1
+                return True, f"OK - {len(result['changes'])} entries đã dịch"
+                
+        except Exception as e:
+            self.error_files += 1
+            self.issues_found.append({
+                'file': original_file.name,
+                'type': 'read_error',
+                'message': str(e)
+            })
+            return False, f"Không thể đọc file: {str(e)}"
+    
+    def generate_report(self, output_file):
+        """Tạo báo cáo chi tiết"""
+        report = []
+        report.append("=" * 80)
+        report.append("GAME TRANSLATION CHECKER REPORT")
+        report.append("=" * 80)
+        report.append(f"Thời gian: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        report.append(f"Tổng files: {self.total_files}")
+        report.append(f"Files OK: {self.ok_files}")
+        report.append(f"Files có vấn đề: {self.error_files}")
+        report.append("")
+        
+        if self.issues_found:
+            report.append("CHI TIẾT CÁC VẤN ĐỀ:")
+            report.append("-" * 40)
+            
+            for item in self.issues_found:
+                report.append(f"\n📁 File: {item['file']}")
+                
+                if item['type'] == 'error':
+                    report.append(f"   ❌ Lỗi: {item['message']}")
+                elif item['type'] == 'read_error':
+                    report.append(f"   ❌ Không đọc được file: {item['message']}")
+                elif item['type'] == 'issues':
+                    report.append(f"   📊 Entries: {item['totalOriginal']} → {item['totalTranslated']}")
+                    report.append(f"   ⚠️  Vấn đề: {len(item['issues'])}")
+                    report.append(f"   ✅ Đã dịch: {len(item['changes'])}")
+                    
+                    for issue in item['issues']:
+                        report.append(f"      - {issue['selfId']}: {issue['message']}")
+        
+        report_text = '\n'.join(report)
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(report_text)
+        
+        return report_text
 
-def translate_text(text: str) -> str:
-    """Gửi yêu cầu dịch sang Gemini API"""
-    response = model.generate_content(f"{PROMPT}\n\n{text}")
-    return response.text.strip()
+
+class GameTranslator:
+    """Tool dịch game script sử dụng Gemini API"""
+    
+    def __init__(self, api_key: str, model: str = "gemini-1.5-flash"):
+        if not GENAI_AVAILABLE:
+            raise ImportError("google.generativeai không được cài đặt")
+        
+        self.api_key = api_key
+        self.model_name = model
+        self.setup_gemini()
+        self.setup_logging()
+        
+    def setup_gemini(self):
+        """Cấu hình Gemini API"""
+        genai.configure(api_key=self.api_key)
+        self.model = genai.GenerativeModel(self.model_name)
+        
+    def setup_logging(self):
+        """Cấu hình logging"""
+        log_filename = f"translation_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_filename, encoding='utf-8'),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+        self.logger.info(f"🚀 Khởi tạo GameTranslator - Model: {self.model_name}")
+        
+    def translate_text(self, text: str) -> str:
+        """Gửi yêu cầu dịch sang Gemini API"""
+        try:
+            response = self.model.generate_content(f"{PROMPT}\n\n{text}")
+            return response.text.strip()
+        except Exception as e:
+            self.logger.error(f"Lỗi dịch: {str(e)}")
+            raise
+    
+    def find_txt_files(self, directory: Path) -> List[Path]:
+        """Tìm tất cả file .txt trong thư mục"""
+        txt_files = [f for f in directory.iterdir() if f.suffix == ".txt" and not f.stem.endswith("_vi")]
+        return txt_files
+    
+    def translate_file(self, input_file: Path, output_dir: Path) -> Tuple[bool, str]:
+        """Dịch một file"""
+        try:
+            self.logger.info(f"→ Bắt đầu dịch: {input_file.name}")
+            
+            # Đọc file gốc
+            with open(input_file, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            
+            # Dịch nội dung
+            result = self.translate_text(content)
+            
+            # Ghi file dịch
+            output_file = output_dir / (input_file.stem + "_vi" + input_file.suffix)
+            with open(output_file, "w", encoding="utf-8") as f:
+                f.write(result)
+            
+            self.logger.info(f"  ✓ Đã dịch: {output_file.name}")
+            return True, str(output_file)
+            
+        except Exception as e:
+            error_msg = f"Lỗi dịch {input_file.name}: {str(e)}"
+            self.logger.error(error_msg)
+            return False, error_msg
+    
+    def run_translation(self, directory: str = ".", output_dir: str = OUTPUT_DIR, delay: int = DELAY) -> Dict[str, Any]:
+        """Chạy quá trình dịch toàn bộ"""
+        root = Path(directory).resolve()
+        out_dir = root / output_dir
+        out_dir.mkdir(exist_ok=True)
+        
+        self.logger.info(f"🔍 Quét thư mục: {root}")
+        self.logger.info(f"📁 Thư mục đích: {out_dir}")
+        
+        # Tìm file .txt
+        txt_files = self.find_txt_files(root)
+        if not txt_files:
+            self.logger.warning("❌ Không tìm thấy file .txt nào")
+            return {
+                'success': False,
+                'total_files': 0,
+                'translated_files': 0,
+                'failed_files': 0,
+                'translated_pairs': []
+            }
+        
+        self.logger.info(f"📋 Tìm thấy {len(txt_files)} file cần dịch")
+        
+        # Dịch từng file
+        translated_pairs = []
+        failed_files = 0
+        
+        for file_path in txt_files:
+            success, result = self.translate_file(file_path, out_dir)
+            
+            if success:
+                translated_pairs.append((file_path, Path(result)))
+            else:
+                failed_files += 1
+            
+            # Delay giữa các request
+            if delay > 0:
+                time.sleep(delay)
+        
+        # Tổng kết
+        translated_files = len(translated_pairs)
+        total_files = len(txt_files)
+        
+        self.logger.info("=" * 60)
+        self.logger.info("📊 KẾT QUẢ DỊCH:")
+        self.logger.info(f"   Total: {total_files} files")
+        self.logger.info(f"   ✅ Dịch thành công: {translated_files} files")
+        self.logger.info(f"   ❌ Dịch thất bại: {failed_files} files")
+        
+        return {
+            'success': failed_files == 0,
+            'total_files': total_files,
+            'translated_files': translated_files,
+            'failed_files': failed_files,
+            'translated_pairs': translated_pairs
+        }
+
+
+class GameTranslationTool:
+    """Tool tích hợp dịch + kiểm tra"""
+    
+    def __init__(self, api_key: str = None, model: str = MODEL):
+        self.api_key = api_key
+        self.model = model
+        self.translator = None
+        self.checker = GameTranslationChecker()
+        
+        # Setup logging
+        self.setup_logging()
+        
+        # Khởi tạo translator nếu có API key
+        if api_key and GENAI_AVAILABLE:
+            try:
+                self.translator = GameTranslator(api_key, model)
+                self.logger.info("✅ Translator đã sẵn sàng")
+            except Exception as e:
+                self.logger.error(f"❌ Không thể khởi tạo translator: {str(e)}")
+        else:
+            self.logger.warning("⚠️  Chỉ chạy chế độ check (không có API key hoặc genai)")
+    
+    def setup_logging(self):
+        """Cấu hình logging chung"""
+        log_filename = f"game_translation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_filename, encoding='utf-8'),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+        self.logger.info("🚀 Khởi tạo GameTranslationTool")
+    
+    def translate_and_check(self, directory: str = ".", output_dir: str = OUTPUT_DIR, delay: int = DELAY) -> bool:
+        """Dịch và kiểm tra tự động"""
+        self.logger.info("🎯 BẮT ĐẦU QUY TRÌNH DỊCH + KIỂM TRA")
+        
+        # Bước 1: Dịch
+        if self.translator:
+            self.logger.info("📝 BƯỚC 1: DỊCH CÁC FILE")
+            translation_result = self.translator.run_translation(directory, output_dir, delay)
+            
+            if not translation_result['success']:
+                self.logger.error("❌ Quá trình dịch thất bại")
+                return False
+            
+            translated_pairs = translation_result['translated_pairs']
+        else:
+            self.logger.info("⚠️  Bỏ qua bước dịch - chỉ chạy kiểm tra")
+            # Tìm các cặp file có sẵn
+            root = Path(directory).resolve()
+            out_dir = root / output_dir
+            translated_pairs = []
+            
+            for original_file in root.glob("*.txt"):
+                if original_file.stem.endswith("_vi"):
+                    continue
+                translated_file = out_dir / (original_file.stem + "_vi.txt")
+                if translated_file.exists():
+                    translated_pairs.append((original_file, translated_file))
+        
+        if not translated_pairs:
+            self.logger.error("❌ Không tìm thấy cặp file nào để kiểm tra")
+            return False
+        
+        # Bước 2: Kiểm tra
+        self.logger.info("🔍 BƯỚC 2: KIỂM TRA CHẤT LƯỢNG")
+        self.logger.info(f"📋 Kiểm tra {len(translated_pairs)} cặp file")
+        
+        all_ok = True
+        for original_file, translated_file in translated_pairs:
+            success, message = self.checker.check_file_pair(original_file, translated_file)
+            
+            if success:
+                self.logger.info(f"✅ {original_file.name}: {message}")
+            else:
+                self.logger.warning(f"⚠️  {original_file.name}: {message}")
+                all_ok = False
+        
+        # Bước 3: Tổng kết
+        self.logger.info("=" * 60)
+        self.logger.info("📊 TỔNG KẾT:")
+        self.logger.info(f"   Total: {self.checker.total_files} files")
+        self.logger.info(f"   ✅ OK: {self.checker.ok_files} files")
+        self.logger.info(f"   ⚠️  Issues: {self.checker.error_files} files")
+        
+        # Tạo báo cáo nếu có vấn đề
+        if self.checker.error_files > 0:
+            report_file = f"translation_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            self.checker.generate_report(report_file)
+            self.logger.info(f"📄 Báo cáo chi tiết: {report_file}")
+        
+        if all_ok:
+            self.logger.info("🎉 TẤT CẢ FILES DỊCH THÀNH CÔNG VÀ KHÔNG CÓ VẤN ĐỀ!")
+        else:
+            self.logger.warning("⚠️  MỘT SỐ FILES CÓ VẤN ĐỀ CẦN XEM XÉT!")
+        
+        return all_ok
+    
+    def check_only(self, directory: str = ".", output_dir: str = OUTPUT_DIR) -> bool:
+        """Chỉ chạy kiểm tra (không dịch)"""
+        self.logger.info("🔍 CHẠY CHẾ ĐỘ KIỂM TRA")
+        
+        root = Path(directory).resolve()
+        out_dir = root / output_dir
+        
+        # Tìm các cặp file
+        pairs = []
+        for original_file in root.glob("*.txt"):
+            if original_file.stem.endswith("_vi"):
+                continue
+            translated_file = out_dir / (original_file.stem + "_vi.txt")
+            if translated_file.exists():
+                pairs.append((original_file, translated_file))
+        
+        if not pairs:
+            self.logger.error("❌ Không tìm thấy cặp file nào để kiểm tra")
+            return False
+        
+        self.logger.info(f"📋 Tìm thấy {len(pairs)} cặp file")
+        
+        # Kiểm tra từng cặp
+        all_ok = True
+        for original_file, translated_file in pairs:
+            success, message = self.checker.check_file_pair(original_file, translated_file)
+            
+            if success:
+                self.logger.info(f"✅ {original_file.name}: {message}")
+            else:
+                self.logger.warning(f"⚠️  {original_file.name}: {message}")
+                all_ok = False
+        
+        # Tổng kết
+        self.logger.info("=" * 60)
+        self.logger.info("📊 KẾT QUẢ KIỂM TRA:")
+        self.logger.info(f"   Total: {self.checker.total_files} files")
+        self.logger.info(f"   ✅ OK: {self.checker.ok_files} files")
+        self.logger.info(f"   ⚠️  Issues: {self.checker.error_files} files")
+        
+        # Tạo báo cáo nếu có vấn đề
+        if self.checker.error_files > 0:
+            report_file = f"check_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            self.checker.generate_report(report_file)
+            self.logger.info(f"📄 Báo cáo chi tiết: {report_file}")
+        
+        return all_ok
+
 
 def main():
-    root = Path(__file__).resolve().parent
-    out_dir = root / OUTPUT_DIR
-    out_dir.mkdir(exist_ok=True)
+    parser = argparse.ArgumentParser(
+        description="Game Translation Tool - Dịch và kiểm tra tự động",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Cách sử dụng:
+  python game_translation.py                     # Dịch + kiểm tra thư mục hiện tại
+  python game_translation.py --check-only       # Chỉ kiểm tra (không dịch)
+  python game_translation.py -d /path/to/dir    # Dịch + kiểm tra thư mục cụ thể
+  python game_translation.py -k YOUR_API_KEY    # Sử dụng API key từ command line
+  python game_translation.py --delay 3          # Đặt delay 3 giây giữa các request
+        """
+    )
+    
+    parser.add_argument('-d', '--directory', 
+                       default='.',
+                       help='Thư mục chứa các file cần dịch (mặc định: thư mục hiện tại)')
+    parser.add_argument('-o', '--output', 
+                       default=OUTPUT_DIR,
+                       help=f'Thư mục đích (mặc định: {OUTPUT_DIR})')
+    parser.add_argument('-k', '--api-key', 
+                       default=API_KEY,
+                       help='API key cho Gemini')
+    parser.add_argument('-m', '--model', 
+                       default=MODEL,
+                       help=f'Model Gemini (mặc định: {MODEL})')
+    parser.add_argument('--delay', 
+                       type=int, 
+                       default=DELAY,
+                       help=f'Delay giữa các request (giây, mặc định: {DELAY})')
+    parser.add_argument('--check-only', 
+                       action='store_true',
+                       help='Chỉ chạy kiểm tra, không dịch')
+    
+    args = parser.parse_args()
+    
+    # Khởi tạo tool
+    tool = GameTranslationTool(
+        api_key=args.api_key if not args.check_only else None,
+        model=args.model
+    )
+    
+    try:
+        if args.check_only:
+            success = tool.check_only(args.directory, args.output)
+        else:
+            success = tool.translate_and_check(args.directory, args.output, args.delay)
+        
+        sys.exit(0 if success else 1)
+        
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Dừng bởi người dùng")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Lỗi không mong muốn: {str(e)}")
+        sys.exit(1)
 
-    txt_files = [f for f in root.iterdir() if f.suffix == ".txt"]
-    if not txt_files:
-        print("Không tìm thấy file .txt trong thư mục.")
-        return
-
-    print(f"Tìm thấy {len(txt_files)} file. Bắt đầu dịch...\n")
-
-    for f in txt_files:
-        print(f"→ Dịch: {f.name}")
-        with open(f, "r", encoding="utf-8", errors="replace") as infile:
-            content = infile.read()
-
-        try:
-            result = translate_text(content)
-            out_path = out_dir / (f.stem + "_vi" + f.suffix)
-            with open(out_path, "w", encoding="utf-8") as outfile:
-                outfile.write(result)
-            print(f"  ✓ Ghi: {out_path.name}")
-        except Exception as e:
-            print(f"  ✗ Lỗi: {e}")
-
-        time.sleep(DELAY)
-
-    print("\n✅ Hoàn tất dịch tất cả file.")
 
 if __name__ == "__main__":
     main()
