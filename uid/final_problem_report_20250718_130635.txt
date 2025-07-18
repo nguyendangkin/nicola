@@ -1,0 +1,17 @@
+================================================================================
+GAME TRANSLATION CHECKER REPORT
+================================================================================
+Thời gian: 2025-07-18 13:06:35
+Tổng files: 1
+Files OK: 0
+Files có vấn đề: 1
+
+CHI TIẾT CÁC VẤN ĐỀ:
+----------------------------------------
+
+📁 File: GOP_Text_NPC_Talk_Isis.uasset.txt
+   📊 Entries: 170 → 139
+   ⚠️  Vấn đề: 2
+   ✅ Đã dịch: 64
+      - Txt_Talk_Isis_Out_SUB_0_VOLUME_1330_010: SelfId "Txt_Talk_Isis_Out_SUB_0_VOLUME_1330_010" bị thiếu trong bản dịch
+      - Txt_Talk_Isis_BattleRoad_Arena_SUB_0_BATTLE_END_0210_010: SelfId "Txt_Talk_Isis_BattleRoad_Arena_SUB_0_BATTLE_END_0210_010" bị thiếu trong bản dịch
